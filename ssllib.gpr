@@ -1,0 +1,41 @@
+with "config/ssllib_config.gpr";
+with "../cryptolib/cryptolib.gpr";
+with "../truststores/truststores.gpr";
+with "../hostkit/hostkit.gpr";
+
+--  The ssllib runtime library. It depends on cryptolib (all cryptography and
+--  PKI), truststores (native trust anchors) and hostkit (host differences),
+--  and on nothing else: not on AUnit, not on project_tools, not on any C
+--  library. The test and tooling crates live under tests/ and tools/.
+project Ssllib is
+
+   for Library_Name use "ssllib";
+   for Library_Version use
+     Project'Library_Name & ".so." & Ssllib_Config.Crate_Version;
+
+   for Source_Dirs use ("src");
+   for Object_Dir use "obj/" & Ssllib_Config.Build_Profile;
+   for Create_Missing_Dirs use "True";
+   for Library_Dir use "lib";
+
+   type Library_Type_Type is ("relocatable", "static", "static-pic");
+   Library_Type : Library_Type_Type :=
+     external ("SSLLIB_LIBRARY_TYPE", external ("LIBRARY_TYPE", "static"));
+   for Library_Kind use Library_Type;
+
+   package Compiler is
+      --  Ada 2022, 120-column style bound, GNAT extensions, and runtime
+      --  assertions/contracts. -gnata is deliberate in every profile: the
+      --  contracts on the record layer and the key schedule are the
+      --  no-nonce-reuse and no-plaintext-before-authentication invariants,
+      --  and a release build that dropped them would drop the checks that
+      --  matter most.
+      for Default_Switches ("Ada") use Ssllib_Config.Ada_Compiler_Switches
+        & ("-gnat2022", "-gnatyM120", "-gnatX", "-gnata", "-gnatwa");
+   end Compiler;
+
+   package Binder is
+      for Switches ("Ada") use ("-Es");  --  symbolic traceback
+   end Binder;
+
+end Ssllib;

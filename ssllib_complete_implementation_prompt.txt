@@ -1,0 +1,1161 @@
+IMPLEMENTATION PROMPT: ssllib — PURE ADA TLS 1.2 AND TLS 1.3 LIBRARY
+
+Implement a complete, production-oriented Ada 2022 TLS library named `ssllib`.
+
+This is not a prototype, wrapper, partial codec, proof of concept, or minimal release. Implement the complete V1 specified below. Do not silently narrow scope, leave security-critical functionality as TODOs, or substitute insecure temporary behavior.
+
+======================================================================
+1. PROJECT IDENTITY
+======================================================================
+
+Project name and Alire crate:
+    ssllib
+
+Root Ada package:
+    SSL
+
+Child test and tooling crate:
+    ssllib_tests
+
+Language:
+    Ada 2022
+
+License:
+    MIT for project-owned runtime code, tests, Ada tooling, examples,
+    generated project-owned code, and documentation. Preserve licenses and
+    attribution for imported vectors, fixtures, and reference material.
+
+Purpose:
+    Provide TLS 1.3 and a deliberately restricted modern TLS 1.2
+    implementation for authenticated, confidential, integrity-protected
+    bidirectional byte streams over caller-supplied transports.
+
+The name `ssllib` does not imply support for obsolete SSL protocols. Do not
+implement SSL 2.0 or SSL 3.0.
+
+The project is Ada-only. Do not provide a C ABI, C bindings, exported C
+symbols, OpenSSL compatibility API, foreign-language binding foundations, or
+architecture organized around future C compatibility.
+
+======================================================================
+2. REQUIRED DEPENDENCIES AND OWNERSHIP
+======================================================================
+
+Use `cryptolib`:
+    https://github.com/bracke/cryptolib
+
+`cryptolib` is the sole provider of:
+    - hashes and HMAC;
+    - HKDF and reusable TLS 1.3 KDF primitives;
+    - AES-GCM and ChaCha20-Poly1305;
+    - secure randomness;
+    - constant-time comparison;
+    - secure wiping;
+    - X25519, NIST ECDH, and enabled finite-field DH;
+    - EdDSA, ECDSA, RSA signing and verification;
+    - PEM, DER, ASN.1, PKCS#8, encrypted PKCS#8, and PKCS#12;
+    - local identity/private-key ownership;
+    - X.509 parsing and signature verification;
+    - certificate path building and validation;
+    - certificate-purpose checks;
+    - DNS and IP service-identity matching;
+    - CRL and OCSP processing;
+    - certificate and SPKI fingerprints.
+
+Do not duplicate any cryptographic, ASN.1, X.509, PKIX, OCSP, or CRL
+implementation in `ssllib`.
+
+Use `truststores`:
+    https://github.com/bracke/truststores
+
+`truststores` is the sole provider of:
+    - native system trust-anchor discovery and loading;
+    - explicitly selected NSS trust sources;
+    - explicitly selected Java trust stores;
+    - platform trust-source metadata and diagnostics.
+
+Native system trust is the default client trust domain. NSS and Java stores
+are opt-in and must not be silently merged into the default trust domain.
+
+Use `hostkit`:
+    https://github.com/bracke/hostkit
+
+Use `hostkit` for every remaining host-specific operation required by runtime
+or tooling, including monotonic clocks, process execution, temporary
+filesystem support, platform-safe path handling, process termination, and
+other genuine host differences. Do not create private Linux, Windows, or
+macOS implementations inside `ssllib` for functionality belonging in
+`hostkit`.
+
+Use AUnit in `ssllib_tests`.
+
+Use `project_tools` in `ssllib_tests` for all build, test, proof,
+documentation, verification, packaging, release, and repository automation.
+
+The runtime crate must not depend on AUnit or `project_tools`.
+
+======================================================================
+3. PROHIBITIONS
+======================================================================
+
+Do not use:
+    - OpenSSL, LibreSSL, BoringSSL, GnuTLS, mbedTLS, or platform TLS APIs as
+      runtime dependencies;
+    - C cryptographic bindings;
+    - direct operating-system entropy access;
+    - direct operating-system trust-store access;
+    - shell, Python, Make, Perl, Ruby, Node, or other non-Ada project tooling;
+    - unchecked conversion of wire bytes into Ada records;
+    - raw Ada record persistence;
+    - unbounded containers on hostile-input paths;
+    - verification-disabled defaults;
+    - implicit environment-variable security policy;
+    - implicit key logging;
+    - a plugin architecture.
+
+Do not implement:
+    - SSL 2.0 or SSL 3.0;
+    - TLS 1.0 or TLS 1.1;
+    - TLS compression;
+    - export suites;
+    - RC4, DES, 3DES, CBC TLS suites, or NULL encryption;
+    - static RSA key exchange;
+    - static DH/ECDH or anonymous DH/ECDH;
+    - renegotiation;
+    - heartbeat;
+    - 0-RTT;
+    - external PSKs;
+    - post-handshake client authentication;
+    - DTLS;
+    - QUIC TLS adaptation;
+    - Encrypted ClientHello;
+    - delegated credentials;
+    - certificate compression;
+    - raw public-key authentication;
+    - TLS 1.2 session-ID resumption;
+    - TOFU in V1.
+
+======================================================================
+4. REQUIRED PROTOCOL SCOPE
+======================================================================
+
+TLS 1.3 client and server:
+    - full certificate-authenticated handshake;
+    - optional and required client certificate authentication;
+    - HelloRetryRequest;
+    - SNI;
+    - ALPN;
+    - OCSP stapling reception and validation;
+    - record_size_limit;
+    - session tickets;
+    - PSK resumption using server-issued tickets;
+    - psk_dhe_ke only;
+    - KeyUpdate;
+    - exporters;
+    - modern channel binding;
+    - close_notify;
+    - truncation detection;
+    - deterministic nonblocking engine;
+    - blocking wrapper;
+    - Ada stream adapter.
+
+Restricted TLS 1.2 client and server:
+    - ECDHE and AEAD only;
+    - Extended Master Secret mandatory;
+    - optional and required client authentication;
+    - SNI;
+    - ALPN;
+    - OCSP CertificateStatus;
+    - stateless session tickets and abbreviated handshakes;
+    - downgrade protection;
+    - secure-renegotiation signaling parsed for the initial handshake only;
+    - all actual renegotiation rejected;
+    - exporters and applicable channel binding;
+    - close_notify and truncation detection.
+
+======================================================================
+5. ALGORITHMS
+======================================================================
+
+TLS 1.3 cipher suites:
+    - TLS_AES_128_GCM_SHA256
+    - TLS_AES_256_GCM_SHA384
+    - TLS_CHACHA20_POLY1305_SHA256
+
+Default preference:
+    1. TLS_AES_128_GCM_SHA256
+    2. TLS_CHACHA20_POLY1305_SHA256
+    3. TLS_AES_256_GCM_SHA384
+
+TLS 1.2 cipher suites:
+    - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+    - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+    - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+    - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+    - TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+    - TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+
+Required groups:
+    - X25519
+    - secp256r1
+    - secp384r1
+
+Optional only when fully supported and tested:
+    - secp521r1
+    - ffdhe2048
+    - ffdhe3072
+    - ffdhe4096
+
+Default ClientHello key shares:
+    - X25519
+    - secp256r1
+
+TLS 1.3 signature schemes:
+    - Ed25519
+    - Ed448 when complete and tested
+    - ECDSA secp256r1 SHA-256
+    - ECDSA secp384r1 SHA-384
+    - ECDSA secp521r1 SHA-512 when enabled
+    - RSA-PSS RSAE SHA-256/384/512
+    - RSA-PSS PSS SHA-256/384/512
+
+TLS 1.2 additionally permits RSA PKCS#1 v1.5 SHA-256/384/512.
+
+Reject MD2, MD5, SHA-1, DSA, weak RSA keys, malformed parameters, and
+algorithm/key mismatches.
+
+======================================================================
+6. CORE ARCHITECTURE
+======================================================================
+
+Implement one deterministic, transport-independent protocol engine.
+
+The engine:
+    - never opens sockets;
+    - never blocks or sleeps;
+    - never reads global clocks;
+    - never performs hidden environment lookup;
+    - never launches background tasks;
+    - consumes caller-supplied encrypted bytes;
+    - produces caller-drained encrypted bytes;
+    - accepts bounded application plaintext;
+    - exposes authenticated application plaintext;
+    - returns explicit semantic events;
+    - reports exactly why progress is blocked.
+
+Build the blocking API, stream API, synchronized wrapper, and event-loop
+integration on this same engine. Do not create separate blocking and
+nonblocking protocol stacks.
+
+Connections are limited, single-use objects. They cannot be reset or reused
+after close or failure.
+
+Lifecycle:
+    - Uninitialized
+    - Ready
+    - Handshaking
+    - Established
+    - Closing
+    - Closed
+    - Failed
+
+TLS 1.2 and TLS 1.3 must have separate explicit state machines. Do not encode
+protocol state as scattered Boolean fields.
+
+======================================================================
+7. PUBLIC NAMESPACE
+======================================================================
+
+Provide at least:
+
+    SSL
+    SSL.Version
+    SSL.Versions
+    SSL.Cipher_Suites
+    SSL.Supported_Groups
+    SSL.Signature_Schemes
+    SSL.ALPN
+    SSL.Server_Names
+    SSL.Alerts
+    SSL.Authentication
+    SSL.Blocking
+    SSL.Cancellation
+    SSL.Channel_Bindings
+    SSL.Clients
+    SSL.Clocks
+    SSL.Configurations
+    SSL.Connection_Metadata
+    SSL.Connections
+    SSL.Credentials
+    SSL.Credentials.Signers
+    SSL.Diagnostics
+    SSL.Engines
+    SSL.Engines.Events
+    SSL.Errors
+    SSL.Exporters
+    SSL.Limits
+    SSL.Servers
+    SSL.Sessions
+    SSL.Sessions.Client_Caches
+    SSL.Streams
+    SSL.Transports
+    SSL.Trust
+    SSL.Trust.Pinning
+    SSL.Trust.Revocation
+    SSL.Unsafe
+    SSL.Unsafe.Key_Logging
+
+Optional:
+    SSL.Synchronized_Connections
+    SSL.Transports.GNAT_Sockets
+    SSL.Sessions.Client_Caches.Memory
+
+Use private children for wire codecs, record handling, transcripts, secrets,
+TLS-version-specific state machines, certificates, sessions, alerts, errors,
+cryptolib adapters, and truststores adapters.
+
+Do not expose internal wire packages.
+
+======================================================================
+8. ADA API RULES
+======================================================================
+
+Use Ada 2022 and the Ada Style Guide. Maximum line length is 120.
+
+Use limited private or controlled types for:
+    - connections;
+    - configurations and builders;
+    - credentials;
+    - trust snapshots;
+    - sessions;
+    - transports;
+    - signers;
+    - secret outputs.
+
+Use immutable private types for semantic IDs, algorithms, names, metadata,
+fingerprints, and optional values.
+
+Ordinary failures use structured results, not exceptions. This includes
+transport errors, malformed peer input, negotiation, certificates, timeout,
+cancellation, resource exhaustion, and session failures.
+
+Exceptions are permitted only for programming-contract violations, impossible
+internal states in development, and the inherited Ada stream interface.
+
+Catch callback exceptions at the boundary and convert them to structured
+provider/application-policy errors.
+
+Use typed stable identifiers:
+    Connection_ID, Credential_ID, Session_ID, Security_Context_ID,
+    Configuration_Fingerprint, Trust_Fingerprint, Certificate_Fingerprint.
+
+Do not imitate OpenSSL names or concepts such as SSL_CTX, SSL_METHOD, BIO,
+SSL_connect, or X509_STORE.
+
+======================================================================
+9. CONFIGURATION
+======================================================================
+
+Provide immutable:
+    - Client_Configuration
+    - Server_Configuration
+
+Provide limited builders:
+    - Client_Builder
+    - Server_Builder
+
+Provide:
+    - Secure_Client_Defaults
+    - Secure_Server_Defaults
+    - Modern_Compatibility_Client
+    - Modern_Compatibility_Server
+
+Secure client defaults:
+    - TLS 1.3 only;
+    - all required TLS 1.3 suites;
+    - X25519, P-256, P-384;
+    - native system trust through truststores;
+    - certificate path and DNS/IP identity verification required;
+    - SNI for DNS names;
+    - session resumption enabled;
+    - 0-RTT disabled;
+    - truncation detected;
+    - close_notify attempted.
+
+Secure server defaults:
+    - TLS 1.3 only;
+    - all required TLS 1.3 suites;
+    - X25519, P-256, P-384;
+    - server-preference negotiation;
+    - client certificates not requested;
+    - tickets disabled until valid ticket keys are configured;
+    - 0-RTT disabled.
+
+Modern compatibility adds restricted TLS 1.2 only and must not weaken TLS 1.3.
+
+Validate configurations before use. Reject inconsistent version/suite/group/
+signature policy, unusable credentials, missing trust for required
+authentication, unavailable required system trust, invalid ALPN policy,
+invalid limits, or ticket issuance without an active key.
+
+Configurations must be immutable and concurrently shareable after build.
+
+======================================================================
+10. ENGINE, TRANSPORT, AND BLOCKING I/O
+======================================================================
+
+Transport status:
+    - Ok
+    - Would_Block
+    - End_Of_Stream
+    - Interrupted
+    - Timed_Out
+    - Failed
+
+Support partial transport reads and writes.
+
+Engine operations must support:
+    - supply encrypted input and report consumed count;
+    - peek queued encrypted output;
+    - partially consume encrypted output;
+    - write plaintext and report accepted count;
+    - peek authenticated application data;
+    - partially consume application data;
+    - report EOF;
+    - report transport failure;
+    - cancel;
+    - start shutdown;
+    - advance with explicit monotonic time.
+
+Events:
+    - Need_Transport_Input
+    - Transport_Output_Available
+    - Application_Data_Available
+    - Application_Data_Accepted
+    - Handshake_Completed
+    - Peer_Close_Notify
+    - Local_Shutdown_Completed
+    - Application_Decision_Required
+    - Deadline_Reached
+    - Failed
+
+Provide Readiness flags for transport read/write, application acceptance/data,
+handshake completion, peer closure, and terminal state.
+
+Provide blocking:
+    - Handshake
+    - Read_Some
+    - Read_Exactly
+    - Write_Some
+    - Write_All
+    - Shutdown
+
+Handle short I/O, Would_Block, interruption, timeout, cancellation, EOF,
+queued output, post-handshake messages, and partial progress.
+
+Use wall clock for certificate validity and monotonic clock for deadlines.
+Use hostkit where platform differences require it.
+
+Base connections are one-task-at-a-time. Optional synchronized wrappers may
+support one reader, one writer, and a shutdown/cancellation controller using a
+serialized protocol driver.
+
+======================================================================
+11. RECORD LAYER
+======================================================================
+
+Implement explicit codecs for the five-byte TLS record header. Never use
+unchecked wire-to-record conversion.
+
+Support incremental parsing at every byte boundary, multiple records per
+input buffer, and trailing partial records.
+
+Maintain separate read and write traffic states:
+    - epoch;
+    - traffic secret;
+    - AEAD context;
+    - IV;
+    - sequence number;
+    - generation;
+    - record and byte counters;
+    - usage limits;
+    - closed state.
+
+TLS 1.3 protected records:
+    - outer type application_data;
+    - legacy version 0x0303;
+    - five-byte header as AEAD associated data;
+    - inner plaintext is content, inner type, zero padding;
+    - remove padding only after successful authentication.
+
+Nonce:
+    - encode 64-bit sequence big-endian;
+    - left-pad to IV size;
+    - XOR static IV.
+
+Never wrap a sequence number or reuse a nonce/key pair.
+Increment only after successful protection/authentication.
+
+On AEAD failure:
+    - expose no plaintext;
+    - do not try alternate keys or sequence values;
+    - map to bad_record_mac;
+    - terminate.
+
+Support record_size_limit, bounded padding, fragmented handshake streams,
+multiple messages in one record, application reads across record boundaries,
+bounded empty records, and narrowly permitted TLS 1.3 compatibility CCS.
+
+Outbound priority:
+    fatal alert, close_notify, handshake/control, KeyUpdate, application data.
+
+======================================================================
+12. TLS 1.3
+======================================================================
+
+ClientHello:
+    - legacy_version 0x0303;
+    - fresh 32-byte random from cryptolib;
+    - non-empty 32-byte legacy session ID by default;
+    - configured suites;
+    - null compression only;
+    - deterministic extension order;
+    - pre_shared_key last.
+
+Implement and validate:
+    server_name, status_request, supported_groups, signature_algorithms,
+    signature_algorithms_cert, ALPN, record_size_limit, supported_versions,
+    psk_key_exchange_modes, key_share, pre_shared_key, cookie, and
+    certificate_authorities where useful.
+
+Reject duplicate extensions. Enforce exact contexts and unsolicited-response
+rules. Keep unknown numeric IDs for diagnostics and ignore them only when the
+protocol permits.
+
+HelloRetryRequest:
+    - exact special random;
+    - at most once;
+    - validate version and requested group;
+    - reject request for a group already supplied with a valid share;
+    - use synthetic message_hash transcript transformation;
+    - preserve random, legacy session ID, SNI, ALPN, suites, and versions;
+    - echo cookie exactly;
+    - recalculate binders.
+
+Transcript:
+    - exact handshake type, three-byte length, and body;
+    - no record header;
+    - exact received bytes, not a canonical re-encoding;
+    - exact locally queued bytes;
+    - snapshot before CertificateVerify and Finished;
+    - SHA-256/SHA-384;
+    - nonfinalizing snapshot;
+    - HRR support.
+
+Key schedule:
+    Use cryptolib primitives but own all TLS orchestration:
+        early secret, binder key, binder Finished key, handshake secret,
+        client/server handshake traffic secrets, Finished keys, master
+        secret, application traffic secrets, exporter master secret,
+        resumption master secret, and traffic update secrets.
+
+Tie derivation operations to named transcript milestones. Do not expose raw
+secret getters.
+
+Implement exact directional key-installation timing.
+
+Authentication:
+    - parse bounded Certificate;
+    - use cryptolib for X.509;
+    - use truststores-derived anchors;
+    - build/validate path;
+    - validate purpose and key usage;
+    - verify expected DNS/IP identity;
+    - evaluate revocation and pinning;
+    - verify CertificateVerify separately;
+    - verify Finished separately.
+
+CertificateVerify input:
+    64 ASCII spaces, exact TLS 1.3 context string, zero separator, transcript
+    hash.
+
+Finished:
+    derive Finished key, HMAC transcript hash, constant-time compare, append
+    message only after successful verification.
+
+Support optional and required client authentication. Empty client
+Certificate is allowed only when policy permits and is never followed by
+CertificateVerify.
+
+======================================================================
+13. RESTRICTED TLS 1.2
+======================================================================
+
+Use a separate state machine.
+
+Require ECDHE, AEAD, SHA-256/384 PRF, EMS, and null compression.
+
+Implement:
+    ClientHello, ServerHello, Certificate, ServerKeyExchange,
+    optional CertificateRequest, ServerHelloDone, optional client Certificate,
+    ClientKeyExchange, optional CertificateVerify, ChangeCipherSpec, Finished.
+
+ServerKeyExchange verification covers:
+    client_random || server_random || exact encoded ECDHE parameters.
+
+Implement TLS 1.2 PRF/P_hash with SHA-256 and SHA-384.
+
+EMS:
+    master_secret = PRF(premaster, "extended master secret", session_hash)
+
+Reject peers not negotiating EMS. Never store or resume a non-EMS session.
+
+Derive the AEAD key block in the protocol-defined order.
+
+ChangeCipherSpec is the real TLS 1.2 epoch switch. CCS itself is plaintext and
+the following record uses the new keys. Reject malformed, early, repeated, or
+unexpected CCS.
+
+Finished:
+    PRF(master_secret, "client finished"/"server finished",
+        transcript_hash), 12 bytes, constant-time comparison.
+
+Implement the distinct TLS 1.2 AES-GCM and ChaCha20-Poly1305 record formats
+and associated data.
+
+No renegotiation and no TLS 1.2 key update. Close and reconnect before key-use
+or sequence limits.
+
+Implement downgrade markers and reject legacy downgrade.
+
+======================================================================
+14. ALPN, SNI, AND EXTENSIONS
+======================================================================
+
+Use a closed internal extension registry with explicit wire IDs and context
+rules. No plugin architecture.
+
+ALPN names are opaque non-empty byte strings, length 1..255, with no UTF-8
+assumption. Reject duplicates. Preserve order.
+
+Support:
+    - server-order selection;
+    - client-order selection;
+    - application selector;
+    - optional or required ALPN.
+
+If required and no overlap, fail with no_application_protocol.
+
+Bind selected ALPN into resumption. Never resume under a different ALPN.
+
+SNI uses a validated DNS-name type:
+    - defined UTF-8/IDNA conversion;
+    - normalized ASCII A-label;
+    - no IP literals;
+    - no locale-sensitive case handling.
+
+Keep transport destination, SNI routing name, and expected authenticated
+identity separate.
+
+Support exact names, valid single-label leftmost wildcards, a single explicit
+default identity, and reject-unrecognized policy.
+
+Credential selection must deterministically combine SNI, wildcard
+specificity, default policy, protocol, peer signature schemes, private signing
+capability, certificate key type, ALPN restrictions, configured priority, and
+stable insertion order.
+
+======================================================================
+15. CREDENTIALS, TRUST, REVOCATION, AND PINNING
+======================================================================
+
+Local credentials are controlled wrappers around cryptolib identity/signer
+objects. Never expose private key bytes or parameters.
+
+Support PEM, DER+PKCS#8, encrypted PKCS#8, PKCS#12, loaded cryptolib
+identities, and external signers.
+
+No filesystem reads or password prompts during handshake.
+
+Passwords and decrypted key material use secret-controlled buffers and are
+wiped after use.
+
+Validate identity structure, key/certificate match, key type, usable signing
+schemes, key usage, and bounds at load time.
+
+External signers report capabilities and sign exact message/digest inputs.
+They may require serialized access. Catch provider exceptions.
+
+Trust:
+    - native system trust is the default;
+    - NSS and Java require explicit selection;
+    - explicit PEM/parsed anchors supported;
+    - trust snapshots immutable;
+    - refresh creates new configuration;
+    - required unavailable or empty sources fail closed;
+    - peer self-signed certificates are never implicit anchors.
+
+Validation pipeline:
+    decode, parse, bounded path build, path validation, purpose, key usage,
+    DNS/IP identity, revocation, pinning, CertificateVerify, Finished.
+
+Use SAN only. No Common Name fallback.
+
+Revocation:
+    - Disabled
+    - Check_When_Available
+    - Require_Valid_Status
+    - Require_Stapled_OCSP
+
+No hidden network fetching. Use stapled or caller/provider-supplied OCSP/CRLs.
+Explicit revoked status always fails.
+
+Pin types:
+    - certificate SHA-256
+    - SPKI SHA-256
+
+Pinning:
+    - No_Pinning
+    - Require_Valid_Path_And_Pin
+    - Pin_Only
+
+Pin scopes include identity, optional endpoint/ALPN, and activation periods.
+Pinning must not silently disable identity matching.
+
+======================================================================
+16. SESSIONS AND TICKETS
+======================================================================
+
+TLS 1.3 supports server-issued NewSessionTicket, PSK derivation from the
+resumption master secret and ticket nonce, psk_dhe_ke, and full-handshake
+fallback. No external PSKs and no 0-RTT.
+
+TLS 1.2 supports stateless tickets only and requires EMS.
+
+Bind sessions to:
+    expected identity, endpoint label, SNI, ALPN, protocol, compatible
+    cipher/hash, trust fingerprint, configuration fingerprint, client
+    credential/authentication state, application Security_Context_ID,
+    authentication reference, and lifetime metadata.
+
+Expose fresh certificate authentication and PSK-resumed authentication as
+different metadata.
+
+Provide client cache interface and bounded task-safe memory implementation.
+Use deterministic expiration and LRU-style eviction. Cache failure normally
+falls back to full handshake.
+
+Implement exact TLS 1.3 binder construction and verification with
+constant-time comparison and wiped intermediates.
+
+Use versioned authenticated-encrypted ticket formats. Authenticate before
+parsing. Include explicit protocol family, purpose, key ID, issue/expiry,
+security bindings, and session state. Never use raw Ada record persistence.
+
+Invalid, unknown, expired, corrupt, or mismatched tickets normally become
+unusable candidates and trigger a full handshake without a useful oracle.
+
+Ticket key states:
+    Pending, Active, Decrypt_Only, Expired.
+
+Normally exactly one active encryption key. Retain bounded decrypt-only keys.
+Support explicit application-managed keys and in-memory library rotation.
+Never persist or distribute keys implicitly.
+
+Persisted client sessions must be protected using an explicit application or
+library persistence key. No unencrypted normal mode and no hidden file I/O.
+
+======================================================================
+17. KEYUPDATE, EXPORTERS, AND CHANNEL BINDING
+======================================================================
+
+Track per-direction/per-generation record and byte usage.
+
+Schedule TLS 1.3 KeyUpdate before safe limits. At hard limits, prohibit another
+record and fail closed if update cannot complete.
+
+KeyUpdate message is encrypted under the old key. Install the new key only
+after queueing/sending that message. Reset sequence to zero. Protect against
+update floods.
+
+Exporters:
+    - available only after successful handshake;
+    - TLS 1.3 uses exporter master secret;
+    - TLS 1.2 uses EMS-authenticated master secret and PRF;
+    - explicit label and context-presence flag;
+    - bounded secret output;
+    - no exporter-secret getter.
+
+Channel binding:
+    - tls-exporter;
+    - tls-server-end-point;
+    - tls-unique only for qualifying TLS 1.2;
+    - never tls-unique for TLS 1.3.
+
+Treat channel-binding values as sensitive controlled data.
+
+======================================================================
+18. SHUTDOWN AND FAILURE
+======================================================================
+
+Support send-only and bidirectional close_notify plus abortive close.
+
+After sending close_notify, reject application writes but permit policy-
+appropriate reads. After receiving close_notify, reject later peer application
+data and expose clean EOF.
+
+Transport EOF without authenticated close_notify is truncation, never clean
+closure.
+
+Fatal failure:
+    preserve primary error, map centralized alert, queue alert if safe, reject
+    application I/O, allow alert ciphertext drain, wipe secrets when no longer
+    needed, and retain immutable failure information.
+
+Do not expose buffered application plaintext after fatal failure detection.
+
+Finalization never performs I/O or blocking work. It wipes secrets and releases
+storage. Graceful close is explicit.
+
+======================================================================
+19. ERRORS, ALERTS, DIAGNOSTICS, AND KEY LOGGING
+======================================================================
+
+Errors contain stable category, explicit numeric code, origin, fatal flag,
+optional alert, protocol/connection/handshake state, provider information,
+bounded parameters, retry classification, and disclosure classification.
+
+Do not derive numeric values from enum positions.
+
+Preserve the first terminal semantic failure. Bound secondary failures.
+
+Centralize TLS 1.2/TLS 1.3 alert mapping.
+
+Support all required alert descriptions and preserve unknown peer alert
+numeric values without inventing semantics.
+
+Diagnostics are structured events with levels:
+    Off, Errors_Only, Connection_Summary, Handshake_Summary,
+    Detailed_Protocol.
+
+Redaction:
+    Strict, Operational, Explicit_Debug.
+
+Never log keys, passwords, secrets, PSKs, binders, ticket plaintext, key-log
+material, or application plaintext.
+
+Provide optional metrics/tracing sinks without runtime framework dependency.
+
+Place key logging under SSL.Unsafe.Key_Logging. It is disabled by default,
+enabled only explicitly per configuration, uses an application sink, never
+opens files, never reads enabling environment variables, supports standard
+key-log labels, and wipes temporary formatting buffers.
+
+======================================================================
+20. RESOURCE AND SECRET LIMITS
+======================================================================
+
+Provide immutable resource limits covering records, handshake messages,
+certificates, extensions, ALPN, groups, signatures, key shares, PSK identities,
+tickets, caches, queues, paths, trust anchors, OCSP, CRLs, pins, KeyUpdates,
+empty records, CCS, diagnostics, and secondary errors.
+
+Suggested defaults:
+    plaintext record 16,384 bytes;
+    handshake message 1 MiB;
+    certificate message 4 MiB;
+    individual certificate 1 MiB;
+    certificate count 16;
+    extension block 64 KiB;
+    extension count 64;
+    ciphertext queue 1 MiB;
+    plaintext queue 1 MiB;
+    path depth 12.
+
+Enforce limits before allocation where possible.
+
+Use controlled secret types and wipe ephemeral keys, shared secrets, all key-
+schedule secrets, traffic secrets, PSKs, ticket/persistence keys, TLS 1.2
+master secrets, decrypted key/ticket/session material, passwords, temporary
+plaintext, exporter output, and channel-binding values.
+
+======================================================================
+21. TESTING
+======================================================================
+
+Create `ssllib_tests` with AUnit and all Ada tooling.
+
+Normal tests must not depend on Internet, DNS, real timing, system randomness,
+current system trust contents, or nondeterministic scheduling.
+
+Provide deterministic clocks, randomness, transport, trust source, session
+cache, ticket keys, signer, diagnostics, and fault injection.
+
+Create an in-memory client/server engine harness with bounded step detection.
+
+Use authoritative vectors for cryptographic primitives, TLS 1.3 key schedule,
+TLS 1.2 PRF, exporters, channel bindings, and X.509/PKIX. Preserve source,
+version, license, and IDs.
+
+Test every suite, group, signature family, role, full/resumed handshake,
+client-auth mode, HRR, SNI, ALPN, stapling, record limits, KeyUpdate, shutdown,
+truncation, EMS, TLS 1.2 ticket resumption, downgrade, and rejection of legacy
+features.
+
+Split representative records and handshake messages at every byte boundary.
+Test several messages per record and epoch-transition boundaries.
+
+Implement deterministic Ada mutation/fuzz runners for bit flips, insertion,
+deletion, length corruption, duplicate/reordered extensions, tag/signature
+corruption, and certificate truncation. Record seeds and add failures to a
+permanent corpus.
+
+Every hostile input must yield valid behavior, structured rejection, or
+bounded need-more-input. Never unhandled ordinary exception, infinite loop,
+unbounded allocation, unauthenticated plaintext, or secret leakage.
+
+Test resource limits at limit-1, limit, limit+1, and huge declared length with
+no payload. Test CPU work bounds.
+
+Test secret cleanup through test-only wipe observers and scan diagnostics for
+recognizable seeded secret patterns.
+
+Test concurrency and callback exceptions/reentrancy.
+
+======================================================================
+22. INTEROPERABILITY AND PROOF
+======================================================================
+
+Implement an Ada interop controller using hostkit.
+
+Test ssllib client to external server and external client to ssllib server
+against available maintained stacks including OpenSSL, GnuTLS, a major
+platform stack, and an independent non-OpenSSL implementation. Add LibreSSL,
+BoringSSL tools, Java, Schannel, and macOS stack where available.
+
+Use loopback, temporary directories, controlled credentials, bounded process
+execution, stable skip reasons, and no global trust modifications.
+
+Verify negotiated version, suite, group, signature, ALPN, SNI,
+authentication, resumption, KeyUpdate, and closure—not merely socket success.
+
+Use GNATprove through project_tools. High-value proof targets include cursors,
+length arithmetic, codecs, nonce/sequence handling, queues, fragmentation,
+duplicate tracking, state transitions, and ticket/session codecs.
+
+Provide development, release, and deep-audit proof profiles. Release proof is
+mandatory.
+
+======================================================================
+23. INVARIANT REGISTRY
+======================================================================
+
+Maintain stable invariant families:
+    REC-*, TLS13-*, TLS12-*, CERT-*, SES-*, EXT-*, ERR-*, API-*,
+    CONC-*, REP-*.
+
+Each entry records statement, owner, tests, proof, interoperability coverage,
+and impact.
+
+At minimum include invariants ensuring:
+    - no nonce reuse;
+    - no plaintext before authentication;
+    - exact transcript construction;
+    - EMS for all TLS 1.2 sessions;
+    - private key confinement;
+    - explicit trust only;
+    - session security-context binding;
+    - explicit extension contexts;
+    - first terminal error preservation;
+    - no test dependency in runtime;
+    - Ada-only tooling;
+    - cryptolib/truststores/hostkit boundaries.
+
+Release fails if an invariant lacks declared verification coverage.
+
+======================================================================
+24. REPOSITORY AND TOOLING
+======================================================================
+
+Repository:
+
+    ssllib/
+    ├── alire.toml
+    ├── alire.lock
+    ├── ssllib.gpr
+    ├── src/
+    ├── tests/
+    │   ├── alire.toml
+    │   ├── alire.lock
+    │   ├── ssllib_tests.gpr
+    │   ├── src/
+    │   ├── vectors/
+    │   ├── corpora/
+    │   ├── certificates/
+    │   ├── interoperability/
+    │   └── generated/
+    ├── examples/
+    ├── docs/
+    ├── README.md
+    ├── SECURITY.md
+    ├── CHANGELOG.md
+    ├── LICENSE
+    └── .gitignore
+
+One root runtime crate and one child test/tooling crate. No peer tooling
+repository.
+
+Build profiles:
+    Development: debug, assertions, contracts, checks, warnings.
+    Validation: maximal practical checks, warnings-as-errors for project code.
+    Release: optimization with required security checks retained.
+
+Development and release workflows build the full dependency graph with the
+appropriate profile through project_tools.
+
+Implement an Ada tool such as:
+    ssllib_tools build
+    ssllib_tools test
+    ssllib_tools test-vectors
+    ssllib_tools test-corpus
+    ssllib_tools test-interop
+    ssllib_tools prove
+    ssllib_tools docs
+    ssllib_tools verify
+    ssllib_tools package
+    ssllib_tools release
+
+Provide text and versioned JSON output and stable exit codes. CI must be thin
+and invoke the same Ada tool. No shell/Python workflow logic.
+
+======================================================================
+25. DOCUMENTATION AND EXAMPLES
+======================================================================
+
+Provide README, SECURITY, CHANGELOG, architecture, package map, quickstart,
+configuration, client/server APIs, engine, blocking API, transports, TLS 1.3,
+TLS 1.2, record layer, certificates/trust, sessions, ALPN/SNI, exporters,
+errors, diagnostics, security model, limits, concurrency, testing,
+interoperability, building, release process, known limitations, and third-party
+attribution.
+
+Provide AI-usable documentation for package maps, contracts, state machines,
+invariants, error registry, allowed workflows, and prohibited workflows.
+
+Provide specification tables for algorithms, extension contexts, alerts, and
+ticket formats.
+
+Every public declaration documents purpose, state, ownership, partial progress,
+failure modes, task safety, secret sensitivity, and view lifetime.
+
+Examples:
+    basic client/server, mutual TLS client/server, ALPN client, nonblocking
+    client, session resumption, custom trust, exporter.
+
+Examples must use secure defaults, identity verification, bounded timeouts,
+structured errors, and clean shutdown.
+
+======================================================================
+26. RELEASE GATES
+======================================================================
+
+The Ada release command must:
+    1. verify clean source and version consistency;
+    2. record dependency versions;
+    3. build full graph in validation mode;
+    4. run unit, vector, corpus, resource, fault, and concurrency tests;
+    5. run release GNATprove;
+    6. build examples and docs;
+    7. run API, dependency-boundary, and no-secret audits;
+    8. run mandatory interoperability and applicable platform matrix;
+    9. build full graph in release mode;
+    10. generate machine-readable release metadata;
+    11. create reproducible source artifacts;
+    12. calculate hashes through cryptolib;
+    13. emit final report.
+
+Any mandatory failure stops release.
+
+Record compiler, Alire, dependency versions, source commit, platforms,
+algorithms, test/proof/interop results, skips, artifacts, hashes, and known
+limitations.
+
+Provide release --dry-run.
+
+Do not automatically publish or tag as part of artifact generation.
+
+At minimum validate Linux x86_64, Linux ARM64, Windows x86_64, and macOS ARM64.
+Do not claim support from compilation alone.
+
+======================================================================
+27. IMPLEMENTATION PHASES
+======================================================================
+
+1. Repository, manifests, dependency API audit, tooling skeleton.
+2. Foundational bytes, bounded buffers, cursors, codecs, results, IDs,
+   invariant registry.
+3. Algorithm registries, limits, configuration builders, fingerprints.
+4. Record layer, queues, AEAD adapters, nonces, epochs, tests, proof.
+5. Transcript and TLS 1.3 key schedule with vectors.
+6. TLS 1.3 full handshake and extensions.
+7. Credentials, truststores adapter, X.509 authentication, SNI selection,
+   client auth, revocation, pinning.
+8. Public engine, lifecycle, blocking API, streams, cancellation, clocks,
+   synchronized wrapper.
+9. TLS 1.3 tickets, cache, binders, and resumption.
+10. KeyUpdate, exporters, and channel binding.
+11. Restricted TLS 1.2 state machines, PRF, EMS, records, tickets, downgrade.
+12. Structured errors, diagnostics, metrics, unsafe key logging.
+13. Complete vectors, corpus, mutation, fault, concurrency, interop, proof.
+14. Documentation, examples, release tooling, platform matrix, V1 report.
+
+Each phase leaves the repository buildable and tested.
+
+======================================================================
+28. V1 ACCEPTANCE
+======================================================================
+
+V1 is complete only when:
+    - TLS 1.3 and restricted TLS 1.2 client/server are complete;
+    - every required suite, group, and signature family interoperates;
+    - server and client certificate authentication work;
+    - cryptolib is the only cryptographic/PKI implementation;
+    - truststores is the only native trust integration;
+    - hostkit owns remaining host differences;
+    - blocking and nonblocking APIs share one engine;
+    - partial I/O and bounded backpressure are correct;
+    - close_notify and truncation are distinct;
+    - session resumption works without 0-RTT;
+    - SNI, ALPN, OCSP, pinning, KeyUpdate, exporters, and channel binding work;
+    - hostile inputs remain bounded;
+    - no unauthenticated plaintext is exposed;
+    - nonce reuse is structurally impossible;
+    - ordinary protocol errors never escape as unhandled exceptions;
+    - stable errors/alerts and secret-safe diagnostics are complete;
+    - key logging is explicitly unsafe and off by default;
+    - all tooling is Ada through project_tools;
+    - release proof, interop, platform, docs, and reproducibility gates pass;
+    - every invariant has verification coverage.
+
+Do not declare V1 complete because the project compiles, one handshake works,
+ssllib interoperates only with itself, TLS 1.2 is unfinished, authentication
+is stubbed, resumption is absent, platform trust is mocked, or release gates
+are missing.
+
+======================================================================
+29. IMPLEMENTATION CONDUCT
+======================================================================
+
+Inspect the current public APIs of cryptolib, truststores, hostkit,
+project_tools, and AUnit before coding. Do not rely on undocumented internals.
+
+Preserve the ownership boundaries. Document any necessary design adaptation.
+
+Keep the tree buildable. Add tests with each subsystem. Do not postpone
+security-negative tests. Do not add TODOs or unsupported-operation stubs for
+required V1 functionality. Do not weaken verification or algorithm policy to
+make tests pass. Do not add a plugin system.
+
+The final deliverable is a complete, maintainable, documented, tested,
+security-conscious Ada TLS library suitable for HTTP, SMTP, IMAP, database,
+and general secure-stream clients and servers.

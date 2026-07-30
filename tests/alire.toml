@@ -1,0 +1,41 @@
+name = "ssllib_tests"
+description = "AUnit suite, vectors and Ada release tooling for ssllib"
+version = "0.1.0-dev"
+
+authors = ["Bent Bracke"]
+maintainers = ["Bent Bracke <bent@bracke.dk>"]
+maintainers-logins = ["bracke"]
+licenses = "MIT"
+tags = ["tls", "test"]
+
+executables = ["ssllib_tests", "ssllib_tools"]
+
+[[depends-on]]
+gnat_native = "=15.2.1"
+
+[[depends-on]]
+aunit = "^26.0.0"
+
+[[depends-on]]
+ssllib = "*"
+
+# All build, test, proof, documentation, verification, packaging, release and
+# repository automation is Ada driven through project_tools. There is no shell,
+# Python, Make, Perl, Ruby or Node in this repository.
+[[depends-on]]
+project_tools = "*"
+
+[[depends-on]]
+cryptolib = "*"
+
+[[depends-on]]
+hostkit = "*"
+
+[[pins]]
+ssllib = { path = ".." }
+project_tools = { path = "../../project_tools" }
+cryptolib = { path = "../../cryptolib" }
+hostkit = { path = "../../hostkit" }
+
+[build-profiles]
+"*" = "development"

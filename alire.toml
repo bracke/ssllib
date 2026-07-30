@@ -1,0 +1,46 @@
+name = "ssllib"
+description = "Pure Ada 2022 TLS 1.3 and restricted modern TLS 1.2 library"
+version = "0.1.0-dev"
+
+authors = ["Bent Bracke"]
+maintainers = ["Bent Bracke <bent@bracke.dk>"]
+maintainers-logins = ["bracke"]
+licenses = "MIT"
+website = "https://github.com/bracke/ssllib"
+
+tags = ["tls", "tls13", "security", "cryptography", "network"]
+
+# The name does not imply SSL 2.0 or SSL 3.0; neither is implemented, and
+# neither ever will be. See docs/security-model.md.
+
+[[depends-on]]
+gnat_native = "=15.2.1"
+
+# The sole provider of hashes, MACs, KDFs, AEADs, randomness, constant-time
+# comparison, secure wiping, key agreement, signatures, ASN.1/DER, PEM,
+# PKCS#8/#12, X.509, PKIX path validation, OCSP and CRL processing. ssllib
+# implements no cryptography of its own.
+[[depends-on]]
+cryptolib = "*"
+
+# The sole provider of native system trust-anchor discovery, and of the
+# explicitly selected NSS and Java trust sources.
+[[depends-on]]
+truststores = "*"
+
+# The remaining genuine host differences: process execution for the
+# interoperability controller, temporary directories, path rules.
+[[depends-on]]
+hostkit = "*"
+
+[[pins]]
+cryptolib = { path = "../cryptolib" }
+truststores = { path = "../truststores" }
+hostkit = { path = "../hostkit" }
+
+[build-profiles]
+"*" = "development"
+
+[[actions]]
+type = "test"
+command = ["alr", "-C", "tests", "build"]
