@@ -7,6 +7,7 @@ maintainers = ["Bent Bracke <bent@bracke.dk>"]
 maintainers-logins = ["bracke"]
 licenses = "MIT"
 website = "https://github.com/bracke/ssllib"
+long-description = "A pure Ada 2022 implementation of TLS 1.3 and a deliberately restricted modern TLS 1.2, for authenticated, confidential, integrity-protected bidirectional byte streams over a transport the caller owns."
 
 tags = ["tls", "tls13", "security", "cryptography", "network"]
 
