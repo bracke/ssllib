@@ -310,7 +310,7 @@ private
       Active     : Boolean := False;
       Closed     : Boolean := False;
       Suite      : SSL.Cipher_Suites.Cipher_Suite := SSL.Cipher_Suites.TLS_AES_128_GCM_SHA256;
-      Key        : SSL.Secrets.Secret;
+      Key        : SSL.Secrets.Secret (SSL.Secrets.Traffic_Capacity);
       Static_IV  : Byte_Array (1 .. Nonce_Length) := [others => 0];
       Next       : Interfaces.Unsigned_64 := 0;
       Generation : Natural := 0;

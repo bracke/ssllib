@@ -289,10 +289,13 @@ private package SSL.Crypto is
 
    --  Compute the shared secret from a peer's share.
    --
-   --  The peer's share is validated for the group first: length, and for the
-   --  NIST curves the point encoding and on-curve check, which CryptoLib does.
-   --  An X25519 result of all zeroes is rejected, as RFC 7748 section 6.1 and
-   --  RFC 8446 section 7.4.2 require.
+   --  The peer's share is validated for the group first, and each family has its
+   --  own answer to what that means. Length always. For the NIST curves, the
+   --  point encoding and the on-curve check, which CryptoLib does. For X25519, a
+   --  result of all zeroes is rejected, as RFC 7748 section 6.1 and RFC 8446
+   --  section 7.4.2 require. For the finite-field groups, 1 < Y < p-1 as
+   --  RFC 8446 section 4.2.8.1 requires, and a shared secret of 1 or p-1, both
+   --  of which CryptoLib checks.
    --  @param Item       the local keypair
    --  @param Peer_Share the peer's key_share entry
    --  @param Target     in out: receives the shared secret
@@ -358,18 +361,20 @@ private
       SHA384    : CryptoLib.Hashes.SHA384_Context;
    end record;
 
-   Maximum_Share_Length : constant Byte_Index := 133;
+   --  The widest key share this library will produce or accept: an ffdhe4096
+   --  public value, at 512 octets. The elliptic-curve shares are at most 133.
+   Maximum_Share_Length : constant Byte_Index := 512;
 
    type Key_Exchange_Pair is limited record
       Generated : Boolean := False;
       Group     : SSL.Supported_Groups.Named_Group := SSL.Supported_Groups.X25519;
 
       --  X25519 keeps its private key in CryptoLib's own opaque type, which
-      --  clears itself; the NIST curves hand back a private scalar as octets,
-      --  which is held in a Secret so that it is scrubbed on the same terms as
-      --  everything else secret here.
+      --  clears itself. The NIST curves and the finite-field groups hand back a
+      --  private scalar or exponent as octets, which is held in a Secret so that
+      --  it is scrubbed on the same terms as everything else secret here.
       Montgomery_Private : CryptoLib.Curve25519.Private_Key;
-      Scalar             : SSL.Secrets.Secret;
+      Scalar             : SSL.Secrets.Secret (SSL.Secrets.Agreement_Capacity);
 
       Share      : Byte_Array (1 .. Maximum_Share_Length) := [others => 0];
       Share_Used : Byte_Index range 0 .. Maximum_Share_Length := 0;

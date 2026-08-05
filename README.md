@@ -4,11 +4,19 @@ A pure Ada 2022 implementation of TLS 1.3 and a deliberately restricted modern
 TLS 1.2, for authenticated, confidential, integrity-protected bidirectional byte
 streams over a transport the caller owns.
 
-> **Status: incomplete.** The cryptographic foundation is built and tested; the
-> handshake state machines and the public connection API are not. `ssllib`
-> cannot open a TLS connection today. **Read [`docs/status.md`](docs/status.md)
-> before using or evaluating this crate** — it lists, subsystem by subsystem,
-> what exists and what does not.
+> **Status: it works, and V1 is not declared.** TLS 1.3 and restricted TLS 1.2,
+> both roles, with session resumption, key updates, mutual authentication,
+> exporters and channel bindings — exercised in the test suite and in six
+> runnable examples with no network involved, and against **OpenSSL, GnuTLS and
+> the JSSE stack in OpenJDK**, under both protocol profiles, in both directions.
+>
+> One thing is outstanding: the platform matrix has run on Linux x86_64 only.
+> `ssllib_tools release` runs every gate and then refuses while that is true,
+> which is the specification's rule about not declaring V1 complete merely
+> because the project builds. **Read [`docs/status.md`](docs/status.md) before
+> using or evaluating this crate** — it lists, subsystem by subsystem, what
+> exists and what does not. Nothing there is stubbed or faked; each missing
+> piece is absent.
 
 The name is historical. SSL 2.0 and SSL 3.0 are not implemented, and neither are
 TLS 1.0 and TLS 1.1. There is no configuration that reaches them, because there
@@ -42,10 +50,11 @@ other secure stream, and that wants:
 | [`hostkit`](https://github.com/bracke/hostkit) | The remaining genuine host differences |
 
 `ssllib` owns the protocol and nothing else. That boundary is checked, not
-asserted: `ssllib_tools verify` refuses a build in which any runtime source
-outside `SSL.Crypto` (and the two units that reach only for secure wipe and
-constant-time comparison) names `CryptoLib`, or in which any runtime source
-names AUnit or `project_tools`.
+asserted: `ssllib_tools verify` refuses a build in which a runtime source names
+`CryptoLib` outside the two declared seams — `SSL.Crypto` for cryptography, and
+`SSL.Credentials` / `SSL.Trust` / `SSL.Certificate_Validation` for X.509 — or in
+which any runtime source names AUnit or `project_tools`. The permitted list is
+explicit and short, so widening it is a decision somebody has to write down.
 
 There is no C ABI, no C bindings, no exported C symbols, no OpenSSL
 compatibility layer, and no architecture arranged around future foreign-language
@@ -69,8 +78,9 @@ refused.
 `TLS_CHACHA20_POLY1305_SHA256`, `TLS_AES_256_GCM_SHA384` — in that preference
 order. TLS 1.2: the six ECDHE-with-AEAD suites over ECDSA and RSA.
 
-**Groups.** X25519, secp256r1, secp384r1, and secp521r1. The RFC 7919
-finite-field groups are not implemented; see `docs/status.md` for why.
+**Groups.** X25519, secp256r1, secp384r1, secp521r1, and the RFC 7919
+finite-field groups ffdhe2048, ffdhe3072 and ffdhe4096. The finite-field groups
+are offered but deliberately not default; see `docs/known-limitations.md`.
 
 **Signature schemes.** Ed25519, Ed448, ECDSA over P-256/P-384/P-521, RSA-PSS in
 both the RSAE and PSS key forms, and — for TLS 1.2 only — RSA PKCS#1 v1.5.

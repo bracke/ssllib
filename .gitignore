@@ -26,3 +26,7 @@ examples/bin/
 *.gcda
 *.gcno
 gnatprove/
+
+# Stray capture from a manual handshake run.
+-.log
+*.log

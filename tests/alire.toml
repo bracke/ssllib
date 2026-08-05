@@ -8,7 +8,7 @@ maintainers-logins = ["bracke"]
 licenses = "MIT"
 tags = ["tls", "test"]
 
-executables = ["ssllib_tests", "ssllib_tools"]
+executables = ["ssllib_tests", "ssllib_tools", "ssllib_peer"]
 
 [[depends-on]]
 gnat_native = "=15.2.1"

@@ -1,3 +1,5 @@
+with Ada.Streams;
+
 package body SSL.Versions is
 
    --------------
@@ -229,5 +231,21 @@ package body SSL.Versions is
          Into (Last) := TLS_1_2_Value;
       end if;
    end Ordered_Values;
+
+   ------------------------------------
+   -- Has_Downgrade_Sentinel --
+   ------------------------------------
+
+   function Has_Downgrade_Sentinel (Random_Value : Byte_Array) return Boolean is
+      use type Ada.Streams.Stream_Element_Array;
+
+      Tail : constant Byte_Array (1 .. 8) :=
+        Random_Value (Random_Value'Last - 7 .. Random_Value'Last);
+   begin
+      --  Not a constant-time comparison, and deliberately not: these are public
+      --  constants compared against a value the peer chose in the clear, so
+      --  there is no secret for a timing difference to leak.
+      return Tail = TLS_1_2_Downgrade or else Tail = TLS_1_1_Downgrade;
+   end Has_Downgrade_Sentinel;
 
 end SSL.Versions;

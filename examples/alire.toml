@@ -1,0 +1,35 @@
+name = "ssllib_examples"
+description = "Runnable examples for ssllib"
+version = "0.1.0-dev"
+authors = ["Bent Bracke"]
+maintainers = ["Bent Bracke <bent@bracke.dk>"]
+maintainers-logins = ["bracke"]
+licenses = "MIT"
+tags = ["tls", "example"]
+executables = [
+  "handshake_example",
+  "alpn_example",
+  "nonblocking_example",
+  "exporter_example",
+  "diagnostics_example",
+]
+
+[[depends-on]]
+gnat_native = "=15.2.1"
+
+[[depends-on]]
+ssllib = "*"
+
+[[depends-on]]
+cryptolib = "*"
+
+[[depends-on]]
+hostkit = "*"
+
+[[pins]]
+ssllib = { path = ".." }
+cryptolib = { path = "../../cryptolib" }
+hostkit = { path = "../../hostkit" }
+
+[build-profiles]
+"*" = "development"

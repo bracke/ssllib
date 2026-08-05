@@ -74,6 +74,15 @@ description, never on the level octet: a peer claiming that `handshake_failure`
 was only a warning does not make it survivable. An alert description this library
 does not recognize is treated as terminal and its number is preserved verbatim.
 
+**A peer's key share is validated before any arithmetic runs.** The length is
+checked against the group's stated width first, so a share of the wrong size is
+refused without touching a curve or a modulus. Beyond that, each family has its
+own rule: the NIST curves get the point encoding and on-curve check, X25519
+rejects an all-zero output as RFC 7748 section 6.1 and RFC 8446 section 7.4.2
+require, and the finite-field groups require 1 < Y < p-1 (RFC 8446 section
+4.2.8.1) and reject a shared secret of 1 or p-1. The suite exercises all of this
+over every offered group, in both directions.
+
 **Every declared length is bounded before it is used.** `SSL.Wire`'s vector
 openers check the declared length against the caller's limit before a single body
 octet is touched, and against the octets actually present before advancing.
@@ -135,6 +144,13 @@ keys, so an inconsistent vector set fails rather than passing quietly.
 The record-layer nonce is checked against RFC 8446 section 5.3 at sequence 0, 1
 and 0x0102, and the high four octets of the IV are checked to be untouched at
 `Unsigned_64'Last`.
+
+RSASSA-PSS verification is checked against a known signature under the
+`rsa_pss_rsae_sha256` profile — MGF1 with the same hash and a salt equal to the
+digest length, which is what RFC 8446 section 4.2.3 fixes. The suite also
+requires that the same signature *fail* under `rsa_pss_rsae_sha384`, so that the
+signature scheme demonstrably selects the hash rather than decorating it, and
+that a single flipped bit is refused.
 
 Every primitive underneath — SHA-2, HMAC, HKDF, AES-GCM, ChaCha20-Poly1305,
 X25519, NIST ECDH, ECDSA, EdDSA, RSA — is CryptoLib's, with CryptoLib's own

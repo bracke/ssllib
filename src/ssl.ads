@@ -149,6 +149,46 @@ package SSL is
    --  @return the decimal image, or "-" for No_Connection
    function Image (Item : Connection_ID) return String;
 
+   --  The digest itself, as octets.
+   --
+   --  Not a secret: `Image` already renders the same value as hexadecimal, and
+   --  a fingerprint is meant to be written down and compared. The octets are
+   --  exposed because a channel binding needs them as octets rather than as
+   --  text, and hexadecimal round-tripping to get at them would be a second
+   --  place for the encoding to be wrong.
+   --  @param Item the fingerprint
+   --  @return the 32 digest octets
+   function Digest_Of (Item : Certificate_Fingerprint) return Byte_Array
+     with Post => Digest_Of'Result'Length = 32;
+
+   --  Was this fingerprint ever taken, or is it the absent one a connection
+   --  with no peer certificate reports?
+   function Is_Present (Item : Certificate_Fingerprint) return Boolean;
+
+   --  The digest octets of the other two fingerprint kinds, and the way back.
+   --
+   --  These exist because a session ticket has to carry them across a process
+   --  boundary: a resumed session must be refused when the configuration or the
+   --  trust snapshot it was established under is not the one now in force, and
+   --  checking that means writing the fingerprints down and reading them back.
+   --  None of them is secret; each is already renderable as hexadecimal.
+   function Digest_Of (Item : Configuration_Fingerprint) return Byte_Array
+     with Post => Digest_Of'Result'Length = 32;
+   function Digest_Of (Item : Trust_Fingerprint) return Byte_Array
+     with Post => Digest_Of'Result'Length = 32;
+
+   function Configuration_From_Digest (Digest : Byte_Array) return Configuration_Fingerprint
+     with Pre => Digest'Length = 32;
+   function Trust_From_Digest (Digest : Byte_Array) return Trust_Fingerprint
+     with Pre => Digest'Length = 32;
+
+   --  The label an application gave a security context, so that it can be
+   --  written into a ticket and compared when the ticket comes back. Not
+   --  secret: it is the application's own name for a cache domain and is never
+   --  sent on the wire.
+   function Label_Of (Item : Security_Context_ID) return String
+     with Post => Label_Of'Result'Length <= 64;
+
    --  What a fingerprint was taken over.
    --  @param Item the fingerprint to inspect
    --  @return Whole_Certificate or Public_Key_Info

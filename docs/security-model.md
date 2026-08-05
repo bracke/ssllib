@@ -149,6 +149,43 @@ rules; doing it approximately produces a hostname comparison that can be tricked
 which is worse than refusing. A resolver has already produced A-labels for the
 caller, so the refusal costs little.
 
+## Why a server must opt in to finite-field groups separately
+
+Accepting a large finite-field group as a server is a denial-of-service
+amplifier, and the asymmetry is worth setting out because it is the one place
+where the right default differs between the two roles.
+
+An attacker sends a ClientHello carrying a random in-range `key_share` for the
+group. The endpoint checks 1 < Y < p-1, which is a comparison and costs
+nothing, and must then perform key generation and agreement to derive handshake
+keys. There is no way to defer that work: it is what produces the keys the rest
+of the handshake needs. The attacker has spent the cost of generating random
+octets and never has to complete the handshake, or even read the reply.
+
+Measured on one development-profile build, so the ratios matter and the
+absolute figures do not:
+
+| group | our CPU per connection | est. strength | connections/sec/core |
+|---|---|---|---|
+| x25519 | 2.3 ms | ~128 bits | ~900 |
+| secp384r1 | 9.4 ms | ~192 bits | ~210 |
+| ffdhe2048 | 10.3 ms | ~103 bits | ~190 |
+| ffdhe4096 | 62.5 ms | ~150 bits | ~16 |
+| ffdhe8192 | 294 ms | ~192 bits | ~3 |
+
+Two things follow. `ffdhe2048` is weaker than X25519 while costing four times
+as much, so it is never the better choice on merit -- only on compliance. And
+`ffdhe8192` buys exactly the strength of `secp384r1` at thirty-one times the
+cost, which is why it is not offered at all.
+
+The consequence for the API, when `SSL.Configurations` is written: a server
+must not acquire finite-field groups through the same call a client uses.
+Enabling them server-side is a separate, explicitly named operation, so that the
+amplification is something an operator chose rather than something they
+inherited from a list they copied. RFC 7919 section 5.2's optional subgroup
+check would not help here; the cost is the exponentiation itself, which is
+unavoidable once the group is accepted.
+
 ## Why buffers cannot grow
 
 A queue that grows under load is a queue whose size an attacker chooses. Every

@@ -1,0 +1,33 @@
+with "config/ssllib_examples_config.gpr";
+with "ssllib.gpr";
+
+--  The examples are built as ordinary executables against the library exactly
+--  as an application would be. Nothing here reaches into the library's private
+--  children, and the project file says so by naming only the public one.
+project Ssllib_Examples is
+
+   for Source_Dirs use ("src");
+   for Object_Dir use "obj/" & Ssllib_Examples_Config.Build_Profile;
+   for Exec_Dir use "bin";
+   for Create_Missing_Dirs use "True";
+   for Main use
+     ("handshake_example.adb",
+      "alpn_example.adb",
+      "nonblocking_example.adb",
+      "exporter_example.adb",
+      "diagnostics_example.adb",
+      "mutual_example.adb");
+
+   package Compiler is
+      --  The same switches the library is built with, so that an example is
+      --  compiled the way an application would be and cannot accidentally rely
+      --  on something the library's own settings enable.
+      for Default_Switches ("Ada") use Ssllib_Examples_Config.Ada_Compiler_Switches
+        & ("-gnat2022", "-gnatyM120", "-gnatX", "-gnata", "-gnatwa");
+   end Compiler;
+
+   package Binder is
+      for Switches ("Ada") use ("-Es");
+   end Binder;
+
+end Ssllib_Examples;

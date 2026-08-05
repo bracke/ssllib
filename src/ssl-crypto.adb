@@ -6,6 +6,7 @@ with CryptoLib.ECDH;
 with CryptoLib.Ed25519;
 with CryptoLib.Ed448;
 with CryptoLib.Errors;
+with CryptoLib.FFDHE;
 with CryptoLib.HKDF;
 with CryptoLib.Macs;
 with CryptoLib.Secure_Wipe;
@@ -19,6 +20,7 @@ package body SSL.Crypto is
    use SSL.Cipher_Suites;
    use type CryptoLib.Errors.Status;
    use type SSL.Signature_Schemes.Signature_Scheme;
+   use type SSL.Supported_Groups.Group_Family;
    use type SSL.Supported_Groups.Named_Group;
 
    ---------------------------------------------------------------------------
@@ -45,6 +47,19 @@ package body SSL.Crypto is
           when SSL.Supported_Groups.Secp384r1 => CryptoLib.EC_Curves.Nistp384,
           when SSL.Supported_Groups.Secp521r1 => CryptoLib.EC_Curves.Nistp521,
           when others                         => CryptoLib.EC_Curves.Nistp256);
+
+   --  The RFC 7919 groups. Deliberately not CryptoLib.Diffie_Hellman, whose
+   --  primes are the SSH MODP ones: the names collide in conversation and the
+   --  primes do not, so a value from one is meaningless in the other.
+   function FFDHE_Group
+     (Group : SSL.Supported_Groups.Named_Group) return CryptoLib.FFDHE.Group_Id
+   is (case Group is
+          when SSL.Supported_Groups.FFDHE3072 => CryptoLib.FFDHE.FFDHE3072,
+          when SSL.Supported_Groups.FFDHE4096 => CryptoLib.FFDHE.FFDHE4096,
+          when others                         => CryptoLib.FFDHE.FFDHE2048);
+
+   function Is_Finite_Field (Group : SSL.Supported_Groups.Named_Group) return Boolean
+   is (SSL.Supported_Groups.Family_Of (Group) = SSL.Supported_Groups.Finite_Field);
 
    -----------
    -- Scrub --
@@ -569,7 +584,29 @@ package body SSL.Crypto is
       Item.Group := Group;
       Error := SSL.Errors.No_Error;
 
-      if Group = SSL.Supported_Groups.X25519 then
+      if Is_Finite_Field (Group) then
+         declare
+            Exponent : Byte_Array
+              (1 .. Byte_Index (CryptoLib.FFDHE.Exponent_Length (FFDHE_Group (Group))))
+              := [others => 0];
+            Value    : Byte_Array (1 .. Width) := [others => 0];
+            Status   : CryptoLib.Errors.Status;
+         begin
+            Status := CryptoLib.FFDHE.Generate_Keypair
+              (Group         => FFDHE_Group (Group),
+               Rng           => Source.State,
+               Private_Value => Exponent,
+               Public_Value  => Value);
+            Error := Mapped (Status, SSL.Errors.Code_Key_Agreement_Failed);
+            if not SSL.Errors.Is_Error (Error) then
+               SSL.Secrets.Set (Item.Scalar, Exponent);
+               Item.Share (1 .. Width) := Value;
+               Item.Share_Used := Width;
+            end if;
+            Scrub (Exponent);
+         end;
+
+      elsif Group = SSL.Supported_Groups.X25519 then
          declare
             Public : CryptoLib.Curve25519.Public_Key;
             Status : constant CryptoLib.Errors.Status :=
@@ -666,7 +703,40 @@ package body SSL.Crypto is
          return;
       end if;
 
-      if Item.Group = SSL.Supported_Groups.X25519 then
+      if Is_Finite_Field (Item.Group) then
+         declare
+            Exponent : Byte_Array (1 .. SSL.Secrets.Length (Item.Scalar));
+            Shared   : Byte_Array (1 .. Width) := [others => 0];
+            Status   : CryptoLib.Errors.Status;
+         begin
+            --  1 < Y < p-1, checked before the exponent touches the value.
+            --  CryptoLib checks it again inside Shared_Secret, and also refuses
+            --  a shared secret of 1 or p-1; doing it here as well means a
+            --  malformed share is refused without an exponentiation.
+            if not CryptoLib.FFDHE.Valid_Peer_Value (FFDHE_Group (Item.Group), Peer_Share) then
+               Error := SSL.Errors.Make
+                 (Code   => SSL.Errors.Code_Key_Exchange_Value_Invalid,
+                  Origin => SSL.Errors.Peer_Message);
+               return;
+            end if;
+
+            SSL.Secrets.Get (Item.Scalar, Exponent);
+            Status := CryptoLib.FFDHE.Shared_Secret
+              (Group         => FFDHE_Group (Item.Group),
+               Private_Value => Exponent,
+               Peer_Value    => Peer_Share,
+               Secret        => Shared);
+            Scrub (Exponent);
+
+            Error := Mapped
+              (Status, SSL.Errors.Code_Key_Agreement_Failed, SSL.Errors.Peer_Message);
+            if not SSL.Errors.Is_Error (Error) then
+               SSL.Secrets.Set (Target, Shared);
+            end if;
+            Scrub (Shared);
+         end;
+
+      elsif Item.Group = SSL.Supported_Groups.X25519 then
          declare
             Peer   : CryptoLib.Curve25519.Public_Key;
             Result : CryptoLib.Curve25519.Public_Key;
@@ -815,8 +885,14 @@ package body SSL.Crypto is
                   when SSL.Supported_Groups.Secp521r1 =>
                      Key_Kind := CryptoLib.X509.ECDSA_P521;
                      Algorithm := CryptoLib.X509.ECDSA_With_SHA512;
-                  when SSL.Supported_Groups.X25519 =>
-                     --  Unreachable: Required_Curve never yields X25519.
+                  when SSL.Supported_Groups.X25519
+                     | SSL.Supported_Groups.FFDHE2048
+                     | SSL.Supported_Groups.FFDHE3072
+                     | SSL.Supported_Groups.FFDHE4096 =>
+                     --  Unreachable: Required_Curve yields only the three ECDSA
+                     --  curves. Listed rather than covered by an "others" so
+                     --  that a new group added to the registry is a compile
+                     --  error here and not a silent fall-through.
                      Error := SSL.Errors.Make
                        (SSL.Errors.Code_Internal_Not_Reachable,
                         SSL.Errors.Local_Implementation);

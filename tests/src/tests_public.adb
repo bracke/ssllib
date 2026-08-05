@@ -1,6 +1,8 @@
 
 with SSL;
 with SSL.Alerts;
+with SSL.Diagnostics;
+with SSL.Unsafe.Key_Logging;
 with SSL.ALPN;
 with SSL.Cipher_Suites;
 with SSL.Errors;
@@ -29,6 +31,7 @@ package body Tests_Public is
    use type SSL.Cipher_Suites.Key_Exchange_Kind;
    use type SSL.Supported_Groups.Named_Group;
    use type SSL.Supported_Groups.Group_Value;
+   use type SSL.Supported_Groups.Group_Family;
    use type SSL.Signature_Schemes.Signature_Scheme;
    use type SSL.Signature_Schemes.Scheme_Value;
    use type SSL.Signature_Schemes.Key_Kind;
@@ -216,10 +219,24 @@ package body Tests_Public is
       Expect (Value_Of (Secp521r1) = 25, "secp521r1 code point");
 
       Expect (Group_For (29, Group) and then Group = X25519, "29 names x25519");
-      Expect (not Group_For (256, Group), "ffdhe2048 is not implemented");
-      Expect (Is_Known_Unimplemented (256), "ffdhe2048 is a known but unimplemented group");
-      Expect (not Is_Known_Unimplemented (12_345), "an arbitrary number is not a known group");
-      Expect_Equal (Image (Group_Value (256)), "ffdhe2048", "unimplemented group image");
+      Expect (Group_For (256, Group) and then Group = FFDHE2048, "256 names ffdhe2048");
+      Expect (Group_For (258, Group) and then Group = FFDHE4096, "258 names ffdhe4096");
+
+      --  ffdhe6144 and ffdhe8192 are implemented by cryptolib and deliberately
+      --  not offered here; they are recognized only so a diagnostic can name
+      --  them rather than printing a bare number.
+      Expect (not Group_For (259, Group), "ffdhe6144 is not offered");
+      Expect (Is_Known_Unoffered (259), "ffdhe6144 is a known but unoffered group");
+      Expect (not Is_Known_Unoffered (256), "ffdhe2048 is offered, so not unoffered");
+      Expect (not Is_Known_Unoffered (12_345), "an arbitrary number is not a known group");
+      Expect_Equal (Image (Group_Value (259)), "ffdhe6144", "unoffered group image");
+      Expect_Equal (Image (Group_Value (256)), "ffdhe2048", "offered group image");
+
+      --  Families, and the sizes that follow from them.
+      Expect (Is_Elliptic_Curve (X25519), "x25519 is a curve");
+      Expect (not Is_Elliptic_Curve (FFDHE2048), "ffdhe2048 is not a curve");
+      Expect (Family_Of (FFDHE4096) = Finite_Field, "ffdhe4096 is finite field");
+      Expect (Family_Of (Secp521r1) = Elliptic_Curve, "secp521r1 is elliptic curve");
 
       --  Share lengths bound a peer's key_share before any curve arithmetic.
       Expect (Share_Length (X25519) = 32, "x25519 share length");
@@ -228,12 +245,30 @@ package body Tests_Public is
       Expect (Share_Length (Secp521r1) = 133, "P-521 uncompressed point length");
       Expect (Secret_Length (Secp521r1) = 66, "P-521 shared secret length");
 
+      --  The finite-field share is the width of p, left-padded, never
+      --  abbreviated (RFC 8446 section 4.2.8.1).
+      Expect (Share_Length (FFDHE2048) = 256, "ffdhe2048 share length");
+      Expect (Share_Length (FFDHE3072) = 384, "ffdhe3072 share length");
+      Expect (Share_Length (FFDHE4096) = 512, "ffdhe4096 share length");
+      Expect (Secret_Length (FFDHE4096) = 512, "ffdhe4096 shared secret length");
+
       Expect (Length (Default_Groups) = 3, "three default groups");
       Expect (Element (Default_Groups, 1) = X25519, "x25519 is preferred first");
       Expect (Length (Default_Key_Share_Groups) = 2, "two default key shares");
       Expect (Is_Subset (Default_Key_Share_Groups, Default_Groups),
               "the default key shares are a subset of the default groups, "
               & "which RFC 8446 4.2.8 requires");
+
+      --  The finite-field groups are offered but never default: a caller that
+      --  does not need them should not pay 512 octets and a 4096-bit
+      --  exponentiation because a default said so.
+      Expect (not Contains (Default_Groups, FFDHE2048),
+              "the default group set holds no finite-field group");
+      Expect (Length (Finite_Field_Groups) = 3, "three finite-field groups are offered");
+      Expect (Contains (Finite_Field_Groups, FFDHE4096),
+              "the finite-field set holds ffdhe4096");
+      Expect (not Is_Subset (Finite_Field_Groups, Default_Groups),
+              "the finite-field groups are not in the default set");
    end Run_Groups;
 
    procedure Run_Signature_Schemes (T : in out AUnit.Test_Cases.Test_Case'Class);
@@ -694,6 +729,226 @@ package body Tests_Public is
       Expect (Is_Fatal (Item), "a provider failure is fatal by default");
    end Run_Errors;
 
+
+   ---------------------------------------------------------------------------
+   --  Diagnostics and key logging
+   ---------------------------------------------------------------------------
+
+   --  A sink that remembers what it was given, and one that refuses to work.
+   type Recording_Sink is limited new SSL.Diagnostics.Sink with record
+      Seen  : Natural := 0;
+      Last  : String (1 .. 256) := [others => ' '];
+      Length : Natural := 0;
+   end record;
+
+   overriding procedure Emit
+     (Item : in out Recording_Sink; What : SSL.Diagnostics.Event);
+   overriding function Description (Item : Recording_Sink) return String;
+
+   overriding procedure Emit
+     (Item : in out Recording_Sink; What : SSL.Diagnostics.Event)
+   is
+      Line : constant String :=
+        SSL.Diagnostics.Image (What, SSL.Diagnostics.Operational);
+   begin
+      Item.Seen := Item.Seen + 1;
+      Item.Length := Natural'Min (Line'Length, Item.Last'Length);
+      Item.Last := [others => ' '];
+      Item.Last (1 .. Item.Length) := Line (Line'First .. Line'First + Item.Length - 1);
+   end Emit;
+
+   overriding function Description (Item : Recording_Sink) return String is
+     ("recording sink" & (if Item.Seen = 0 then "" else ""));
+
+   type Failing_Sink is limited new SSL.Diagnostics.Sink with null record;
+
+   overriding procedure Emit
+     (Item : in out Failing_Sink; What : SSL.Diagnostics.Event);
+   overriding function Description (Item : Failing_Sink) return String;
+
+   overriding procedure Emit
+     (Item : in out Failing_Sink; What : SSL.Diagnostics.Event)
+   is
+      pragma Unreferenced (Item, What);
+   begin
+      raise Program_Error with "a sink that misbehaves";
+   end Emit;
+
+   overriding function Description (Item : Failing_Sink) return String is
+     ("failing sink");
+
+   type Key_Log_Sink is limited new SSL.Unsafe.Key_Logging.Sink with record
+      Lines  : Natural := 0;
+      Last   : String (1 .. 512) := [others => ' '];
+      Length : Natural := 0;
+   end record;
+
+   overriding procedure Write_Line (Item : in out Key_Log_Sink; Line : String);
+   overriding function Description (Item : Key_Log_Sink) return String;
+
+   overriding procedure Write_Line (Item : in out Key_Log_Sink; Line : String) is
+   begin
+      Item.Lines := Item.Lines + 1;
+      Item.Length := Natural'Min (Line'Length, Item.Last'Length);
+      Item.Last := [others => ' '];
+      Item.Last (1 .. Item.Length) := Line (Line'First .. Line'First + Item.Length - 1);
+   end Write_Line;
+
+   overriding function Description (Item : Key_Log_Sink) return String is
+     ("key log sink" & (if Item.Lines = 0 then "" else ""));
+
+   type Failing_Key_Log is limited new SSL.Unsafe.Key_Logging.Sink with null record;
+
+   overriding procedure Write_Line (Item : in out Failing_Key_Log; Line : String);
+   overriding function Description (Item : Failing_Key_Log) return String;
+
+   overriding procedure Write_Line (Item : in out Failing_Key_Log; Line : String) is
+      pragma Unreferenced (Item, Line);
+   begin
+      raise Constraint_Error with "a key log sink that misbehaves";
+   end Write_Line;
+
+   overriding function Description (Item : Failing_Key_Log) return String is
+     ("failing key log");
+
+   procedure Run_Diagnostics (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   procedure Run_Diagnostics (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Diagnostics renames SSL.Diagnostics;
+
+      Recorder : Recording_Sink;
+      Broken   : Failing_Sink;
+
+      Failure : constant SSL.Errors.Error_Information :=
+        SSL.Errors.Make (SSL.Errors.Code_Certificate_Expired, SSL.Errors.Peer_Message);
+   begin
+      --  Nothing is emitted at Off, whatever the event is. A library that
+      --  logged by default would be writing into an application's output
+      --  uninvited.
+      declare
+         What : Diagnostics.Event :=
+           Diagnostics.Make (Diagnostics.Connection_Failed, Failure);
+      begin
+         Diagnostics.Add (What, "reason", "expired");
+         Diagnostics.Emit_Safely (Recorder, What, Diagnostics.Off, Diagnostics.Operational);
+         Expect_Equal (Recorder.Seen, 0, "nothing is emitted at Off");
+
+         --  A failure reaches an Errors_Only sink.
+         Diagnostics.Emit_Safely
+           (Recorder, What, Diagnostics.Errors_Only, Diagnostics.Operational);
+         Expect_Equal (Recorder.Seen, 1, "a failure reaches an Errors_Only sink");
+      end;
+
+      --  A per-message event does not, because it is a Detailed_Protocol event
+      --  and the level is the filter.
+      declare
+         What : constant Diagnostics.Event :=
+           Diagnostics.Make (Diagnostics.Handshake_Message_Sent);
+      begin
+         Diagnostics.Emit_Safely
+           (Recorder, What, Diagnostics.Errors_Only, Diagnostics.Operational);
+         Expect_Equal (Recorder.Seen, 1, "a protocol event does not reach an Errors_Only sink");
+
+         Diagnostics.Emit_Safely
+           (Recorder, What, Diagnostics.Detailed_Protocol, Diagnostics.Operational);
+         Expect_Equal (Recorder.Seen, 2, "it does reach a Detailed_Protocol sink");
+      end;
+
+      --  Strict redaction says the kind and the failure and no named facts,
+      --  because a named fact is by definition something about this particular
+      --  connection.
+      declare
+         What : Diagnostics.Event :=
+           Diagnostics.Make (Diagnostics.Certificate_Refused, Failure);
+         Strict_Line : String := Diagnostics.Image (What, Diagnostics.Strict);
+      begin
+         Diagnostics.Add (What, "name", "www.example.com");
+         Strict_Line := Diagnostics.Image (What, Diagnostics.Strict);
+         Expect (Index_Of (Strict_Line, "www.example.com") = 0,
+                 "strict redaction withholds the server name");
+         Expect (Index_Of (Diagnostics.Image (What, Diagnostics.Operational),
+                           "www.example.com") > 0,
+                 "operational redaction includes it");
+      end;
+
+      --  At most four facts, and a fifth is dropped rather than raising: an
+      --  event that raised while being built would turn a diagnostic into a
+      --  failure.
+      declare
+         What : Diagnostics.Event := Diagnostics.Make (Diagnostics.Handshake_Completed);
+      begin
+         Diagnostics.Add (What, "a", "1");
+         Diagnostics.Add (What, "b", "2");
+         Diagnostics.Add (What, "c", "3");
+         Diagnostics.Add (What, "d", "4");
+         Diagnostics.Add (What, "e", "5");
+         Expect (Index_Of (Diagnostics.Image (What, Diagnostics.Operational), "e=5") = 0,
+                 "a fifth fact is dropped");
+         Expect (Index_Of (Diagnostics.Image (What, Diagnostics.Operational), "d=4") > 0,
+                 "the fourth is kept");
+      end;
+
+      --  A sink that raises loses its event and nothing else. Turning that into
+      --  a connection failure would let an application break its own
+      --  connections by writing a bad logger.
+      declare
+         What : constant Diagnostics.Event :=
+           Diagnostics.Make (Diagnostics.Connection_Failed, Failure);
+      begin
+         Diagnostics.Emit_Safely
+           (Broken, What, Diagnostics.Detailed_Protocol, Diagnostics.Operational);
+         Expect (True, "a sink that raises does not propagate");
+      end;
+   end Run_Diagnostics;
+
+   procedure Run_Key_Logging (T : in out AUnit.Test_Cases.Test_Case'Class);
+
+   procedure Run_Key_Logging (T : in out AUnit.Test_Cases.Test_Case'Class) is
+      pragma Unreferenced (T);
+      package Logging renames SSL.Unsafe.Key_Logging;
+
+      Recorder : Key_Log_Sink;
+      Broken   : Failing_Key_Log;
+
+      Client_Random : constant SSL.Byte_Array (1 .. 32) := [others => 16#AB#];
+      Secret        : constant SSL.Byte_Array (1 .. 32) := [others => 16#01#];
+      Error         : SSL.Errors.Error_Information;
+   begin
+      --  The labels are the reference implementation's, exactly. The whole
+      --  point of the format is that an existing capture tool can read it, and
+      --  a label of this library's own invention would produce a line no tool
+      --  understands.
+      Expect_Equal (Logging.Image (Logging.Client_Traffic_Secret_0),
+                    "CLIENT_TRAFFIC_SECRET_0", "the label is the standard one");
+      Expect_Equal (Logging.Image (Logging.Client_Random_To_Master),
+                    "CLIENT_RANDOM", "the TLS 1.2 label is CLIENT_RANDOM");
+
+      Logging.Emit (Recorder, Logging.Client_Traffic_Secret_0, Client_Random, Secret, Error);
+      Expect (not SSL.Errors.Is_Error (Error), "emitting a key log line succeeds");
+      Expect_Equal (Recorder.Lines, 1, "one line was written");
+      --  Thirty-two octets of 16#AB# and thirty-two of 16#01#, in lower-case
+      --  hexadecimal, written out rather than computed: a rendering checked
+      --  against a rendering produced the same way would pass however wrong
+      --  both were.
+      Expect_Equal
+        (Recorder.Last (1 .. Recorder.Length),
+         "CLIENT_TRAFFIC_SECRET_0 "
+         & "abababababababababababababababababababababababababababababababab"
+         & " "
+         & "0101010101010101010101010101010101010101010101010101010101010101",
+         "the line is label, client random, secret");
+
+      --  A sink that raises becomes a structured provider failure naming it,
+      --  rather than an exception unwinding a connection with keys installed.
+      Logging.Emit (Broken, Logging.Server_Traffic_Secret_0, Client_Random, Secret, Error);
+      Expect (SSL.Errors.Is_Error (Error), "a key log sink that raises is caught");
+      Expect (SSL.Errors.Code_Of (Error) = SSL.Errors.Code_Application_Callback_Raised,
+              "it is reported as a callback that raised");
+      Expect (Index_Of (SSL.Errors.Image (Error), "failing key log") > 0,
+              "the failure names the sink");
+   end Run_Key_Logging;
+
    procedure Run_Identifiers (T : in out AUnit.Test_Cases.Test_Case'Class);
 
    procedure Run_Identifiers (T : in out AUnit.Test_Cases.Test_Case'Class) is
@@ -756,6 +1011,10 @@ package body Tests_Public is
       Register_Routine (T, Run_Alerts'Access, "alerts: values, terminality, unknown peer alerts");
       Register_Routine (T, Run_Errors'Access, "errors: mapping, disclosure, accumulation");
       Register_Routine (T, Run_Identifiers'Access, "identifiers: contexts and fingerprints");
+      Register_Routine (T, Run_Diagnostics'Access,
+                        "diagnostics: levels, redaction, bounded facts, a sink that raises");
+      Register_Routine (T, Run_Key_Logging'Access,
+                        "key logging: standard labels, line format, a sink that raises");
    end Register_Tests;
 
 end Tests_Public;

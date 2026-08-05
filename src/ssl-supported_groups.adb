@@ -11,6 +11,9 @@ package body SSL.Supported_Groups is
          when Secp256r1 => return Secp256r1_Value;
          when Secp384r1 => return Secp384r1_Value;
          when Secp521r1 => return Secp521r1_Value;
+         when FFDHE2048 => return FFDHE2048_Value;
+         when FFDHE3072 => return FFDHE3072_Value;
+         when FFDHE4096 => return FFDHE4096_Value;
       end case;
    end Value_Of;
 
@@ -26,19 +29,34 @@ package body SSL.Supported_Groups is
          when Secp256r1_Value => Value := Secp256r1;
          when Secp384r1_Value => Value := Secp384r1;
          when Secp521r1_Value => Value := Secp521r1;
+         when FFDHE2048_Value => Value := FFDHE2048;
+         when FFDHE3072_Value => Value := FFDHE3072;
+         when FFDHE4096_Value => Value := FFDHE4096;
          when others          => return False;
       end case;
       return True;
    end Group_For;
 
-   -------------------------------
-   -- Is_Known_Unimplemented --
-   -------------------------------
+   --------------------------
+   -- Is_Known_Unoffered --
+   --------------------------
 
-   function Is_Known_Unimplemented (Item : Group_Value) return Boolean is
+   function Is_Known_Unoffered (Item : Group_Value) return Boolean is
    begin
-      return Item in FFDHE2048_Value | FFDHE3072_Value | FFDHE4096_Value;
-   end Is_Known_Unimplemented;
+      return Item in FFDHE6144_Value | FFDHE8192_Value;
+   end Is_Known_Unoffered;
+
+   ----------------
+   -- Family_Of --
+   ----------------
+
+   function Family_Of (Item : Named_Group) return Group_Family is
+   begin
+      case Item is
+         when X25519 | Secp256r1 | Secp384r1 | Secp521r1 => return Elliptic_Curve;
+         when FFDHE2048 | FFDHE3072 | FFDHE4096          => return Finite_Field;
+      end case;
+   end Family_Of;
 
    -------------------
    -- Share_Length --
@@ -51,6 +69,12 @@ package body SSL.Supported_Groups is
          when Secp256r1 => return 65;    --  0x04 || X(32) || Y(32)
          when Secp384r1 => return 97;    --  0x04 || X(48) || Y(48)
          when Secp521r1 => return 133;   --  0x04 || X(66) || Y(66)
+
+         --  The width of p, which is how RFC 8446 section 4.2.8.1 encodes a
+         --  finite-field share: left-padded with zeroes, never abbreviated.
+         when FFDHE2048 => return 256;
+         when FFDHE3072 => return 384;
+         when FFDHE4096 => return 512;
       end case;
    end Share_Length;
 
@@ -65,6 +89,12 @@ package body SSL.Supported_Groups is
          when Secp256r1 => return 32;
          when Secp384r1 => return 48;
          when Secp521r1 => return 66;
+
+         --  Y**x mod p, the width of p and unhashed. TLS 1.3 feeds exactly
+         --  these octets into the key schedule.
+         when FFDHE2048 => return 256;
+         when FFDHE3072 => return 384;
+         when FFDHE4096 => return 512;
       end case;
    end Secret_Length;
 
@@ -73,9 +103,8 @@ package body SSL.Supported_Groups is
    ------------------------
 
    function Is_Elliptic_Curve (Item : Named_Group) return Boolean is
-      pragma Unreferenced (Item);
    begin
-      return True;
+      return Family_Of (Item) = Elliptic_Curve;
    end Is_Elliptic_Curve;
 
    -----------
@@ -89,6 +118,9 @@ package body SSL.Supported_Groups is
          when Secp256r1 => return "secp256r1";
          when Secp384r1 => return "secp384r1";
          when Secp521r1 => return "secp521r1";
+         when FFDHE2048 => return "ffdhe2048";
+         when FFDHE3072 => return "ffdhe3072";
+         when FFDHE4096 => return "ffdhe4096";
       end case;
    end Image;
 
@@ -100,9 +132,8 @@ package body SSL.Supported_Groups is
       end if;
 
       case Item is
-         when FFDHE2048_Value => return "ffdhe2048";
-         when FFDHE3072_Value => return "ffdhe3072";
-         when FFDHE4096_Value => return "ffdhe4096";
+         when FFDHE6144_Value => return "ffdhe6144";
+         when FFDHE8192_Value => return "ffdhe8192";
          when others =>
             declare
                Text : constant String := Natural (Item)'Image;
@@ -223,6 +254,20 @@ package body SSL.Supported_Groups is
       return Result;
    end Default_Groups;
 
+   ---------------------------
+   -- Finite_Field_Groups --
+   ---------------------------
+
+   function Finite_Field_Groups return Group_List is
+      Result : Group_List := No_Groups;
+      Done   : Boolean;
+   begin
+      Append (Result, FFDHE2048, Done);
+      Append (Result, FFDHE3072, Done);
+      Append (Result, FFDHE4096, Done);
+      return Result;
+   end Finite_Field_Groups;
+
    --------------------------------
    -- Default_Key_Share_Groups --
    --------------------------------
@@ -247,7 +292,7 @@ package body SSL.Supported_Groups is
       end if;
 
       declare
-         Text   : String (1 .. 128) := [others => ' '];
+         Text   : String (1 .. 192) := [others => ' '];
          Length : Natural := 0;
 
          procedure Append_Text (Value : String);

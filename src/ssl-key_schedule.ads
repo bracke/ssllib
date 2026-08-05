@@ -149,26 +149,47 @@ private package SSL.Key_Schedule is
    --  Stage 3: master secret, application traffic keys, exporter, resumption
    ---------------------------------------------------------------------------
 
-   --  Derive the master secret, both application traffic secrets, the exporter
-   --  master secret and the resumption master secret.
+   --  Derive the master secret, both application traffic secrets and the
+   --  exporter master secret.
    --
-   --  Two transcript milestones are needed and they are different: the
-   --  application traffic secrets and the exporter master secret are bound to
-   --  the transcript through the server's Finished, while the resumption master
-   --  secret is bound to the transcript through the client's Finished. Passing
-   --  one where the other belongs produces keys that verify against nothing.
-   --  @param Item              the schedule, at Handshake_Stage
-   --  @param Server_Finished_Hash the transcript hash after server Finished
-   --  @param Client_Finished_Hash the transcript hash after client Finished
-   --  @param Error             out: No_Error, or a derivation failure
+   --  Bound to the transcript through the **server's** Finished, which is the
+   --  milestone RFC 8446 section 7.1 fixes for these three. That milestone is
+   --  reached before the client has said anything in its second flight, which
+   --  is what lets a server write application data as soon as its own Finished
+   --  is out -- the half-RTT the protocol is designed to allow.
+   --
+   --  The resumption master secret is *not* derived here, because it is bound
+   --  to a different milestone. Deriving both from one call would mean waiting
+   --  for the client's Finished before either was available, and a server that
+   --  waited could not write early.
+   --  @param Item                 the schedule, at Handshake_Stage
+   --  @param Server_Finished_Hash the transcript hash after the server Finished
+   --  @param Error                out: No_Error, or a derivation failure
    procedure Derive_Master
      (Item                 : in out Schedule;
       Server_Finished_Hash : Byte_Array;
-      Client_Finished_Hash : Byte_Array;
       Error                : out SSL.Errors.Error_Information)
      with Pre => Current_Stage (Item) = Handshake_Stage
-                 and then Server_Finished_Hash'Length = Digest_Width (Item)
+                 and then Server_Finished_Hash'Length = Digest_Width (Item);
+
+   --  Derive the resumption master secret.
+   --
+   --  Bound to the transcript through the **client's** Finished. Passing the
+   --  server's hash here instead would produce a ticket that resumes to
+   --  nothing, and the two ends would find out one connection later.
+   --  @param Item                 the schedule, at Master_Stage
+   --  @param Client_Finished_Hash the transcript hash after the client Finished
+   --  @param Error                out: No_Error, or a derivation failure
+   procedure Derive_Resumption
+     (Item                 : in out Schedule;
+      Client_Finished_Hash : Byte_Array;
+      Error                : out SSL.Errors.Error_Information)
+     with Pre => Current_Stage (Item) = Master_Stage
                  and then Client_Finished_Hash'Length = Digest_Width (Item);
+
+   --  Has the resumption master secret been derived? Until it has, no ticket
+   --  can be issued and none can be accepted.
+   function Has_Resumption (Item : Schedule) return Boolean;
 
    ---------------------------------------------------------------------------
    --  Products
@@ -260,9 +281,12 @@ private package SSL.Key_Schedule is
    --      Expand-Label(Derive-Secret(exporter_master, label, ""),
    --                   "exporter", Hash(context), length)
    --
-   --  The context-presence flag is explicit because an empty context and no
-   --  context are different inputs, and a library that treats them as the same
-   --  produces the same key for two callers who asked for different things.
+   --  The context-presence flag is explicit, and under TLS 1.3 it makes no
+   --  difference: RFC 8446 section 7.5 defines an absent context as the empty
+   --  string, so both give the same output. It is a parameter because RFC 5705,
+   --  which TLS 1.2 uses, does distinguish them, and because a caller writing
+   --  `Has_Context => False` is saying something a caller passing an empty
+   --  array might not have meant.
    --  @param Item        the schedule, at Master_Stage
    --  @param Label       the exporter label
    --  @param Context     the context octets, ignored when Has_Context is False
@@ -314,9 +338,13 @@ private package SSL.Key_Schedule is
 
 private
 
+   --  Every secret the schedule holds is at most the hash's digest width, so
+   --  all of them are Schedule_Capacity. The key-agreement secret, which may be
+   --  512 octets for ffdhe4096, is the caller's and is passed in as octets --
+   --  it is never stored here.
    type Party_Secrets is record
-      Handshake_Traffic : SSL.Secrets.Secret;
-      Application       : SSL.Secrets.Secret;
+      Handshake_Traffic : SSL.Secrets.Secret (SSL.Secrets.Schedule_Capacity);
+      Application       : SSL.Secrets.Secret (SSL.Secrets.Schedule_Capacity);
       Generation        : Natural := 0;
    end record;
 
@@ -325,15 +353,16 @@ private
    type Schedule is limited record
       Started : Boolean := False;
       Reached : Stage := Unstarted;
+      Resumption_Ready : Boolean := False;
       Suite   : SSL.Cipher_Suites.Cipher_Suite := SSL.Cipher_Suites.TLS_AES_128_GCM_SHA256;
       With_PSK : Boolean := False;
 
-      Early     : SSL.Secrets.Secret;
-      Binder    : SSL.Secrets.Secret;
-      Handshake : SSL.Secrets.Secret;
-      Master    : SSL.Secrets.Secret;
-      Exporter  : SSL.Secrets.Secret;
-      Resumption : SSL.Secrets.Secret;
+      Early      : SSL.Secrets.Secret (SSL.Secrets.Schedule_Capacity);
+      Binder     : SSL.Secrets.Secret (SSL.Secrets.Schedule_Capacity);
+      Handshake  : SSL.Secrets.Secret (SSL.Secrets.Schedule_Capacity);
+      Master     : SSL.Secrets.Secret (SSL.Secrets.Schedule_Capacity);
+      Exporter   : SSL.Secrets.Secret (SSL.Secrets.Schedule_Capacity);
+      Resumption : SSL.Secrets.Secret (SSL.Secrets.Schedule_Capacity);
 
       Sides : Party_Array;
    end record;

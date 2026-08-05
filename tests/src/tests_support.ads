@@ -28,6 +28,14 @@ package Tests_Support is
    procedure Expect_Equal (Actual : String; Expected : String; Label : String);
 
    --  An AUnit message string from ordinary text.
+   --  Compare two counts, reporting both when they differ.
+   procedure Expect_Equal (Actual : Natural; Expected : Natural; Label : String);
+
+   --  Where Needle first appears in Haystack, or zero. Used to assert that a
+   --  rendering does or does not carry a particular piece of text -- which is
+   --  how the redaction rules are checked.
+   function Index_Of (Haystack : String; Needle : String) return Natural;
+
    function Message (Text : String) return AUnit.Message_String;
 
 end Tests_Support;

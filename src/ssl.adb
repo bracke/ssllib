@@ -1,3 +1,5 @@
+with Ada.Streams;
+
 package body SSL is
 
    Hex_Digits : constant String := "0123456789abcdef";
@@ -186,5 +188,34 @@ package body SSL is
       Item := (Subject => Subject, Digest => Digest);
       return True;
    end Parse_Fingerprint;
+
+   -------------------
+   -- Digest_Of --
+   -------------------
+
+   function Digest_Of (Item : Certificate_Fingerprint) return Byte_Array is (Item.Digest);
+
+   --------------------
+   -- Is_Present --
+   --------------------
+
+   function Is_Present (Item : Certificate_Fingerprint) return Boolean is
+      use type Ada.Streams.Stream_Element_Array;
+   begin
+      return Item.Digest /= Null_Digest;
+   end Is_Present;
+
+   function Digest_Of (Item : Configuration_Fingerprint) return Byte_Array is (Item.Digest);
+   function Digest_Of (Item : Trust_Fingerprint) return Byte_Array is (Item.Digest);
+
+   function Configuration_From_Digest
+     (Digest : Byte_Array) return Configuration_Fingerprint
+   is ((Digest => Digest));
+
+   function Trust_From_Digest (Digest : Byte_Array) return Trust_Fingerprint is
+     ((Digest => Digest));
+
+   function Label_Of (Item : Security_Context_ID) return String is
+     (Item.Text (1 .. Item.Length));
 
 end SSL;

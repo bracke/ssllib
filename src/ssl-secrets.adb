@@ -3,6 +3,17 @@ with CryptoLib.Secure_Wipe;
 
 package body SSL.Secrets is
 
+   --  The test-only observer. Package state rather than a component, because
+   --  it belongs to the program and not to any one secret, and because a
+   --  per-secret hook would grow every `Secret` in the library by a pointer to
+   --  pay for something no production build uses.
+   Watcher : Wipe_Observer := null;
+
+   procedure Observe_Wipes (Sink : Wipe_Observer) is
+   begin
+      Watcher := Sink;
+   end Observe_Wipes;
+
    ---------
    -- Set --
    ---------
@@ -84,8 +95,18 @@ package body SSL.Secrets is
       --  Through the object's own address, and over the whole buffer rather
       --  than the used prefix: a shorter secret set over a longer one would
       --  otherwise leave the longer one's tail behind.
-      CryptoLib.Secure_Wipe.Wipe (Item.Octets'Address, Natural (Maximum_Length));
-      Item.Used := 0;
+      declare
+         Was : constant Secret_Length := Item.Used;
+      begin
+         CryptoLib.Secure_Wipe.Wipe (Item.Octets'Address, Natural (Item.Capacity));
+         Item.Used := 0;
+
+         --  After the wiping, never before: an observer that ran first could
+         --  be told about a wipe that then did not happen.
+         if Watcher /= null then
+            Watcher.all (Was);
+         end if;
+      end;
    end Wipe;
 
    -----------

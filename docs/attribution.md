@@ -47,6 +47,14 @@ nonce construction and section 4.4.1's `message_hash` transformation are
 implemented from the specification text and checked against values computed from
 it, not copied from a published trace.
 
+### RSASSA-PSS known answer
+
+A signature produced with OpenSSL under the `rsa_pss_rsae_sha256` profile
+(SHA-256, MGF1-SHA-256, 32-octet salt), with its 2048-bit public key, used in
+`tests/src/ssl-internal_tests.adb` (`Check_PSS_Signature_Verification`). It
+establishes that this library's PSS path agrees with an independent
+implementation, which a round-trip against CryptoLib alone would not.
+
 ### Not yet imported
 
 The specification requires authoritative vectors for the TLS 1.2 PRF, exporters,

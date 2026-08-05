@@ -221,7 +221,7 @@ package body SSL.Key_Schedule is
       Error           : out SSL.Errors.Error_Information)
    is
       pragma Unreferenced (Is_External);
-      Finished : SSL.Secrets.Secret;
+      Finished : SSL.Secrets.Secret (SSL.Secrets.Schedule_Capacity);
    begin
       Into := [others => 0];
 
@@ -259,7 +259,7 @@ package body SSL.Key_Schedule is
    is
       Width      : constant Byte_Index := Digest_Width (Item);
       Empty_Hash : constant Byte_Array := SSL.Crypto.Digest (Hash_Of (Item), Empty_Bytes);
-      Salt       : SSL.Secrets.Secret;
+      Salt       : SSL.Secrets.Secret (SSL.Secrets.Schedule_Capacity);
       Salt_Octets : Byte_Array (1 .. Width) := [others => 0];
    begin
       --  Derive-Secret(Early, "derived", "") is the salt for the second Extract.
@@ -330,13 +330,12 @@ package body SSL.Key_Schedule is
    procedure Derive_Master
      (Item                 : in out Schedule;
       Server_Finished_Hash : Byte_Array;
-      Client_Finished_Hash : Byte_Array;
       Error                : out SSL.Errors.Error_Information)
    is
       Width       : constant Byte_Index := Digest_Width (Item);
       Empty_Hash  : constant Byte_Array := SSL.Crypto.Digest (Hash_Of (Item), Empty_Bytes);
       Zeroes      : constant Byte_Array (1 .. Width) := [others => 0];
-      Salt        : SSL.Secrets.Secret;
+      Salt        : SSL.Secrets.Secret (SSL.Secrets.Schedule_Capacity);
       Salt_Octets : Byte_Array (1 .. Width) := [others => 0];
    begin
       SSL.Crypto.Derive_Secret
@@ -398,9 +397,25 @@ package body SSL.Key_Schedule is
          return;
       end if;
 
-      --  The resumption master secret is bound through the client's Finished --
-      --  a different milestone, and getting the two the wrong way round yields
-      --  a ticket that resumes to nothing.
+      Item.Sides (Client_Side).Generation := 0;
+      Item.Sides (Server_Side).Generation := 0;
+      Item.Reached := Master_Stage;
+   end Derive_Master;
+
+   --------------------------------
+   -- Derive_Resumption --
+   --------------------------------
+
+   procedure Derive_Resumption
+     (Item                 : in out Schedule;
+      Client_Finished_Hash : Byte_Array;
+      Error                : out SSL.Errors.Error_Information)
+   is
+   begin
+      --  A different milestone from the one above, and getting the two the
+      --  wrong way round yields a ticket that resumes to nothing -- which both
+      --  ends would find out one connection later, with no evidence pointing
+      --  back here.
       SSL.Crypto.Derive_Secret
         (Algorithm       => Hash_Of (Item),
          Secret          => Item.Master,
@@ -412,10 +427,10 @@ package body SSL.Key_Schedule is
          return;
       end if;
 
-      Item.Sides (Client_Side).Generation := 0;
-      Item.Sides (Server_Side).Generation := 0;
-      Item.Reached := Master_Stage;
-   end Derive_Master;
+      Item.Resumption_Ready := True;
+   end Derive_Resumption;
+
+   function Has_Resumption (Item : Schedule) return Boolean is (Item.Resumption_Ready);
 
    ---------------------------------------------------------------------------
    --  Products
@@ -433,7 +448,7 @@ package body SSL.Key_Schedule is
       IV          : out Byte_Array;
       Error       : out SSL.Errors.Error_Information)
    is
-      Source : SSL.Secrets.Secret;
+      Source : SSL.Secrets.Secret (SSL.Secrets.Schedule_Capacity);
    begin
       Key := [others => 0];
       IV := [others => 0];
@@ -485,7 +500,7 @@ package body SSL.Key_Schedule is
       Into  : out Byte_Array;
       Error : out SSL.Errors.Error_Information)
    is
-      Source : SSL.Secrets.Secret;
+      Source : SSL.Secrets.Secret (SSL.Secrets.Schedule_Capacity);
    begin
       Into := [others => 0];
       SSL.Secrets.Copy (Source, Item.Sides (Which).Handshake_Traffic);
@@ -534,7 +549,7 @@ package body SSL.Key_Schedule is
       Which : Party;
       Error : out SSL.Errors.Error_Information)
    is
-      Next : SSL.Secrets.Secret;
+      Next : SSL.Secrets.Secret (SSL.Secrets.Schedule_Capacity);
    begin
       SSL.Crypto.Expand_Label
         (Algorithm => Hash_Of (Item),
@@ -578,7 +593,7 @@ package body SSL.Key_Schedule is
       Error       : out SSL.Errors.Error_Information)
    is
       Empty_Hash : constant Byte_Array := SSL.Crypto.Digest (Hash_Of (Item), Empty_Bytes);
-      Stage_One  : SSL.Secrets.Secret;
+      Stage_One  : SSL.Secrets.Secret (SSL.Secrets.Schedule_Capacity);
    begin
       Into := [others => 0];
 
@@ -596,9 +611,16 @@ package body SSL.Key_Schedule is
       end if;
 
       --  Second step: Expand-Label under "exporter" with the hash of the
-      --  context. No context and an empty context are different: the first
-      --  hashes nothing at all in the RFC's terms and the second hashes the
-      --  empty string, and both are spelled here rather than conflated.
+      --  context.
+      --
+      --  In TLS 1.3 an absent context and an empty one give the same output,
+      --  and that is the specification's own choice rather than a shortcut
+      --  here: RFC 8446 section 7.5 says that when no context is used the
+      --  context value is the empty string, so both paths hash the empty
+      --  string. The flag is still a parameter because TLS 1.2's exporter is
+      --  different -- RFC 5705 length-prefixes the context and distinguishes
+      --  its absence -- and a schedule interface that dropped the flag could
+      --  not express that.
       declare
          Context_Hash : constant Byte_Array :=
            (if Has_Context

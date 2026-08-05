@@ -9,21 +9,53 @@ is in `docs/status.md`; this document is for the things that are decisions.
 it is documented separately, in detail, in `docs/status.md`. Everything below
 assumes the rest is eventually built.
 
-## Finite-field Diffie-Hellman is not supported
+## Finite-field Diffie-Hellman is offered but never default
 
-The RFC 7919 groups `ffdhe2048`, `ffdhe3072` and `ffdhe4096` are not implemented.
-CryptoLib provides the SSH MODP groups (group14, group16, group18), which are
-different primes; implementing FFDHE would mean adding cryptography to `ssllib`,
-which the ownership boundary forbids, or shipping a group with no authoritative
-test vectors, which the project's own rules forbid.
+`ffdhe2048`, `ffdhe3072` and `ffdhe4096` are implemented, over CryptoLib's
+RFC 7919 groups. They are not in the default group set and never will be.
 
-The three code points are recognized by `SSL.Supported_Groups` so a negotiation
-failure can name them rather than reporting a bare number.
+An ffdhe4096 exchange costs about 62 ms of CPU per connection against 2.3 ms for
+X25519, and puts 512 octets on the wire in each direction against 32. A caller
+whose policy requires finite-field key exchange adds
+`SSL.Supported_Groups.Finite_Field_Groups`; a caller who does not need it should
+not be paying for it because a default said so.
 
-Consequence: a peer that offers only finite-field groups cannot be reached. In
-practice every TLS 1.3 implementation offers X25519 or P-256, so this affects
-essentially nothing on the open internet; it may matter in an environment whose
-policy mandates FFDHE.
+Enabling them on a **server** will be a separate, explicitly named operation
+rather than the same call a client uses, because accepting a large finite-field
+group server-side is a denial-of-service amplifier: an attacker forces a full
+exponentiation with a random in-range key share and pays nothing. See the
+measurements in `docs/security-model.md`.
+
+`ffdhe6144` and `ffdhe8192` are implemented by CryptoLib and are not offered
+here. The specification's optional set stops at `ffdhe4096`, and neither buys
+anything on merit: `ffdhe8192` provides about the security of `secp384r1` --
+~192 bits by RFC 7919 appendix A -- at roughly thirty-one times the cost, 294 ms
+per connection against 9.4 ms. The only reason to add them would be a compliance
+regime that names the group by name. Their values are recognized so a diagnostic
+can say what a peer asked for.
+
+No subgroup check is performed on a finite-field peer value, because CryptoLib
+does not perform one: with a safe prime, a value passing the 1 < Y < p-1 check
+leaks at most the parity of the private exponent through the Legendre symbol, and
+closing that bit costs a second full exponentiation. CryptoLib documents the
+choice; it is inherited here rather than re-litigated.
+
+## Client authentication requires a credential the server will accept
+
+A client that is asked for a certificate sends one only when it holds a
+credential *and* the request's `signature_algorithms` names a scheme that
+credential can produce. Otherwise it declines with an empty Certificate, which is
+the conforming answer.
+
+That is a limitation worth stating because the failure it avoids is confusing:
+sending a chain this endpoint could not then sign for would leave the server
+waiting for a CertificateVerify that never came, and the handshake would fail
+with the shape of a protocol error rather than the shape of a client that has no
+certificate the server would take.
+
+The scheme sets are not negotiable from the outside. If a server asks only for
+schemes a deployment's client key cannot produce, the answer is a different key,
+not a flag.
 
 ## IDNA conversion is the caller's
 

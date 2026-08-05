@@ -49,6 +49,37 @@ package SSL.Versions is
    --  @param Item  the wire value
    --  @param Value out: the version, unchanged when the result is False
    --  @return True when Item is 0x0303 or 0x0304
+
+   ---------------------------------------------------------------------------
+   --  Downgrade sentinels
+   ---------------------------------------------------------------------------
+
+   --  RFC 8446 section 4.1.3: a server that supports TLS 1.3 but negotiates
+   --  something older writes one of these into the last eight octets of its
+   --  ServerHello random. A client that supports TLS 1.3 and sees one after
+   --  negotiating the older version knows an attacker removed 1.3 from its
+   --  offer, because a genuine older server could not have produced it.
+   --
+   --  The sentinel is the one anti-downgrade mechanism in the protocol that
+   --  works without either end having to remember anything, and it costs a
+   --  comparison. It is written out here rather than derived, because these
+   --  are opaque constants the specification fixes.
+   subtype Downgrade_Sentinel is Byte_Array (1 .. 8);
+
+   --  "DOWNGRD" followed by 01: negotiated TLS 1.2 by a 1.3-capable server.
+   TLS_1_2_Downgrade : constant Downgrade_Sentinel :=
+     [16#44#, 16#4F#, 16#57#, 16#4E#, 16#47#, 16#52#, 16#44#, 16#01#];
+
+   --  "DOWNGRD" followed by 00: negotiated TLS 1.1 or older.
+   TLS_1_1_Downgrade : constant Downgrade_Sentinel :=
+     [16#44#, 16#4F#, 16#57#, 16#4E#, 16#47#, 16#52#, 16#44#, 16#00#];
+
+   --  Does this ServerHello random end in a downgrade sentinel?
+   --  @param Random_Value the 32 random octets as they arrived
+   --  @return True when the last eight octets are either sentinel
+   function Has_Downgrade_Sentinel (Random_Value : Byte_Array) return Boolean
+     with Pre => Random_Value'Length = 32;
+
    function Version_For (Item : Version_Value; Value : out Protocol_Version) return Boolean;
 
    --  Is this the wire value of a protocol this library deliberately refuses?
