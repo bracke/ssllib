@@ -221,6 +221,28 @@ private
       Driver : SSL.Engines.Engine;
       Medium : SSL.Transports.Transport_Reference;
       Ident  : Connection_ID := No_Connection;
+
+      --  What the transport delivered and the engine could not take yet.
+      --
+      --  The engine's input queue is bounded, so supplying it a chunk is a
+      --  *partial* operation: it takes what fits and says how much. This held
+      --  the octets it took and dropped the rest -- and a dropped octet is not
+      --  a lost octet, it is a stream that no longer parses. The next record
+      --  header lands mid-record, its length is nonsense, and what is fed to
+      --  the AEAD authenticates as a forgery: bad_record_mac, at whatever
+      --  offset the queue first filled.
+      --
+      --  Which is why it looked like an unreliable network. It needed a
+      --  transfer long enough for the application to fall behind the socket --
+      --  82 MB from a fast CDN did it, 40 kB in a test never did -- and it
+      --  arrived at a different offset every time, on the hosts whose reads
+      --  are largest, while a slower peer never saw it at all.
+      --
+      --  So the remainder waits here and goes in first next time, and nothing
+      --  new is read while any of it is outstanding.
+      Held       : Byte_Array (1 .. Read_Chunk) := [others => 0];
+      Held_First : Byte_Index := 1;
+      Held_Last  : Byte_Index := 0;
    end record;
 
    function State_Of (Item : Connection) return SSL.Engines.Lifecycle is

@@ -74,6 +74,45 @@ package body SSL.Connections is
          return;
       end if;
 
+      --  Anything held back from the last read goes in before anything new is
+      --  read: the stream is a sequence, and octets that arrived earlier are
+      --  earlier octets.
+      if Item.Held_Last >= Item.Held_First then
+         declare
+            Taken : Byte_Index;
+         begin
+            SSL.Engines.Supply_Encrypted
+              (Item.Driver,
+               Item.Held (Item.Held_First .. Item.Held_Last), Taken, Error);
+            if SSL.Errors.Is_Error (Error) then
+               Status := SSL.Transports.Failed;
+               return;
+            end if;
+
+            Item.Held_First := Item.Held_First + Taken;
+
+            --  Decrypting what was just supplied is what frees the room for
+            --  the rest of it.
+            SSL.Engines.Advance (Item.Driver, Tick, Error);
+            if SSL.Errors.Is_Error (Error) then
+               Status := SSL.Transports.Failed;
+               return;
+            end if;
+
+            if Item.Held_First > Item.Held_Last then
+               Item.Held_First := 1;
+               Item.Held_Last  := 0;
+            else
+               --  Still more than the engine will take. Progress was made if
+               --  anything moved; the caller comes back.
+               Status :=
+                 (if Taken > 0 then SSL.Transports.Ok
+                  else SSL.Transports.Would_Block);
+               return;
+            end if;
+         end;
+      end if;
+
       SSL.Transports.Receive_Safely (Item.Medium.all, Chunk, Count, Status, Local);
 
       case Status is
@@ -90,6 +129,15 @@ package body SSL.Connections is
             if SSL.Errors.Is_Error (Error) then
                return;
             end if;
+
+            --  What the engine could not take is kept, not dropped. See the
+            --  Held fields for what dropping it did.
+            if Consumed < Count then
+               Item.Held_First := 1;
+               Item.Held_Last  := Count - Consumed;
+               Item.Held (1 .. Item.Held_Last) := Chunk (Consumed + 1 .. Count);
+            end if;
+
             SSL.Engines.Advance (Item.Driver, Tick, Error);
 
          when SSL.Transports.End_Of_Stream =>
@@ -307,6 +355,12 @@ package body SSL.Connections is
    procedure Wipe (Item : in out Connection) is
    begin
       SSL.Engines.Wipe (Item.Driver);
+
+      --  Ciphertext rather than a secret, but it is peer data this object no
+      --  longer has any reason to hold.
+      Item.Held := [others => 0];
+      Item.Held_First := 1;
+      Item.Held_Last := 0;
    end Wipe;
 
 end SSL.Connections;

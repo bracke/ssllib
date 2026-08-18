@@ -4132,6 +4132,93 @@ package body SSL.Internal_Tests is
          end if;
       end;
 
+      --  And now with the transport delivering full reads, which is where the
+      --  octets went.
+      --
+      --  A read does not end on a record boundary, so a part-record stays in
+      --  the engine's input queue and the next read is added to it. That
+      --  remainder grows a little with every read, and once it is nearly a
+      --  whole record the next full-size read no longer fits: the engine takes
+      --  what it can and says how much -- and the connection used to drop the
+      --  rest. A dropped octet is not a lost octet; it is a stream that no
+      --  longer parses, so the next record header lands mid-record and what
+      --  reaches the AEAD authenticates as a forgery.
+      --
+      --  Which is why this was found as an unreliable network: an 82 MB
+      --  download failing with bad_record_mac at a different offset every run,
+      --  on the hosts whose reads are largest. It takes tens of full reads for
+      --  the remainder to grow that far, which is why every test that sent a
+      --  message and read it back passed.
+      declare
+         Payload  : Byte_Array (1 .. 1_200_000);
+         Landed   : Byte_Array (1 .. 1_200_000) := [others => 0];
+         Accepted : Byte_Index;
+         Sent     : Byte_Index := 0;
+         Received : Byte_Index := 0;
+      begin
+         for Index in Payload'Range loop
+            Payload (Index) := Byte ((Natural (Index) * 31 + 7) mod 256);
+         end loop;
+
+         Rounds := 0;
+         while Received < Payload'Length loop
+            Rounds := Rounds + 1;
+            if Rounds > 100_000 then
+               return "a large stream did not get through";
+            end if;
+
+            --  The sender runs ahead, so that what the receiver reads is a
+            --  full transport read rather than whatever has just trickled in.
+            --  A real peer on a fast link does this by itself.
+            for Feeding in 1 .. 200 loop
+               if Sent < Payload'Length then
+                  Conn.Write_Available
+                    (Client, Payload (Sent + 1 .. Payload'Last), Accepted, Error);
+                  if SSL.Errors.Is_Error (Error) then
+                     return "writing ahead of the reader failed: "
+                            & SSL.Errors.Image (Error);
+                  end if;
+                  Sent := Sent + Accepted;
+               end if;
+
+               Conn.Step (Client, Moved, Error);
+               if SSL.Errors.Is_Error (Error) then
+                  return "the client failed while sending ahead: "
+                         & SSL.Errors.Image (Error);
+               end if;
+            end loop;
+
+            Conn.Step (Server, Moved, Error);
+            if SSL.Errors.Is_Error (Error) then
+               return "the server failed on a full read: "
+                      & SSL.Errors.Image (Error);
+            end if;
+
+            --  Everything available: an engine whose plaintext queue fills
+            --  refuses outright, and that backpressure is a different question
+            --  from this one.
+            loop
+               declare
+                  Chunk : Byte_Array (1 .. 8_192) := [others => 0];
+                  Count : Byte_Index;
+               begin
+                  Conn.Read_Available (Server, Chunk, Count, Error);
+                  if SSL.Errors.Is_Error (Error) then
+                     return "reading a full stream failed: "
+                            & SSL.Errors.Image (Error);
+                  end if;
+                  exit when Count = 0;
+                  Landed (Received + 1 .. Received + Count) := Chunk (1 .. Count);
+                  Received := Received + Count;
+               end;
+            end loop;
+         end loop;
+
+         if Landed /= Payload then
+            return "octets went missing from a stream of full reads";
+         end if;
+      end;
+
       --  An orderly shutdown across the same transport.
       Conn.Begin_Shutdown (Client, Error);
       if SSL.Errors.Is_Error (Error) then
