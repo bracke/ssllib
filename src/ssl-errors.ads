@@ -124,6 +124,15 @@ package SSL.Errors is
    Code_Trust_Required_But_Absent         : constant Error_Code := 1010;
    Code_System_Trust_Unavailable          : constant Error_Code := 1011;
    Code_Trust_Source_Empty                : constant Error_Code := 1012;
+
+   --  The host's own trust store holds more anchors than these bounds allow.
+   --
+   --  Told apart from a generic limit failure because the answer is different:
+   --  a peer sending too many certificates is a peer to refuse, and a system
+   --  store larger than the configuration is a *configuration* that cannot
+   --  hold this host -- the store is not going to shrink. The provider text
+   --  carries both numbers.
+   Code_System_Trust_Exceeds_Bound        : constant Error_Code := 1030;
    Code_Invalid_ALPN_Policy               : constant Error_Code := 1013;
    Code_Invalid_Limits                    : constant Error_Code := 1014;
    Code_Ticket_Issuance_Without_Key       : constant Error_Code := 1015;

@@ -1,3 +1,4 @@
+with Ada.Strings.Fixed;
 with Ada.Strings.Unbounded;
 with Ada.Unchecked_Deallocation;
 
@@ -321,6 +322,33 @@ package body SSL.Trust is
    -- Load_System_Anchors --
    ----------------------------
 
+   --  How many certificates a PEM text holds.
+   --
+   --  By its armour rather than by decoding: what this is for is telling a
+   --  caller how large the store it just read is, and a text this endpoint
+   --  will not accept should not have to be decoded first to say so.
+   function Count_Certificates (Text : String) return Natural;
+
+   function Count_Certificates (Text : String) return Natural is
+      Marker : constant String := "-----BEGIN CERTIFICATE-----";
+      From   : Positive := Text'First;
+      Found  : Natural := 0;
+   begin
+      loop
+         declare
+            At_One : constant Natural :=
+              Ada.Strings.Fixed.Index (Text, Marker, From);
+         begin
+            exit when At_One = 0;
+            Found := Found + 1;
+            exit when At_One + Marker'Length > Text'Last;
+            From := At_One + Marker'Length;
+         end;
+      end loop;
+
+      return Found;
+   end Count_Certificates;
+
    procedure Load_System_Anchors
      (Item    : in out Snapshot;
       At_Time : SSL.Clocks.Wall_Time;
@@ -345,6 +373,31 @@ package body SSL.Trust is
                Provider => "truststores returned no system anchor material");
             return;
          end if;
+
+         --  Counted before it is absorbed, so that a store the configuration
+         --  cannot hold is said as what it is.
+         --
+         --  Absorbing answers with a limit failure -- "allowed 512, requested
+         --  513" -- which describes the moment it stopped rather than the
+         --  situation: this host has 563 roots and these bounds allow 512, and
+         --  the store is not going to shrink. A caller reading the first
+         --  cannot tell whether to raise a bound or look at its trust source;
+         --  a caller reading the second can.
+         declare
+            Held : constant Natural := Count_Certificates (Text);
+         begin
+            if Held > Bounds.Maximum_Trust_Anchors then
+               Error := SSL.Errors.Make
+                 (Code     => SSL.Errors.Code_System_Trust_Exceeds_Bound,
+                  Origin   => SSL.Errors.Local_Policy,
+                  Provider =>
+                    "the system trust store holds"
+                    & Natural'Image (Held)
+                    & " anchors; these bounds allow"
+                    & Natural'Image (Bounds.Maximum_Trust_Anchors));
+               return;
+            end if;
+         end;
 
          Absorb_PEM (Item, Text, Native_System, Bounds, Added, Error);
          if SSL.Errors.Is_Error (Error) then

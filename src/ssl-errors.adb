@@ -75,6 +75,7 @@ package body SSL.Errors is
             | Code_Trust_Required_But_Absent
             | Code_System_Trust_Unavailable
             | Code_Trust_Source_Empty
+            | Code_System_Trust_Exceeds_Bound
             | Code_Invalid_ALPN_Policy
             | Code_Invalid_Limits
             | Code_Ticket_Issuance_Without_Key

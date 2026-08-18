@@ -188,6 +188,12 @@ package SSL.Limits is
       --  Deliberately below what a desktop host's own store holds: an endpoint
       --  choosing these bounds is one that names its own anchors, and a host
       --  store of several hundred roots is not what it means to trust.
+      --
+      --  Pairing these bounds with Load_System_Anchors is therefore a
+      --  configuration that cannot hold this host, and it is refused as one:
+      --  Code_System_Trust_Exceeds_Bound, whose text says how many the store
+      --  holds and how many these allow. A Windows host carries 563, which is
+      --  over the *default* 4096's predecessor and far over this.
       Maximum_Trust_Anchors              => 256,
       Maximum_Session_Cache_Entries      => 64,
       Maximum_Diagnostic_Events          => 128,
