@@ -4132,26 +4132,25 @@ package body SSL.Internal_Tests is
          end if;
       end;
 
-      --  And now with the transport delivering full reads, which is where the
+      --  And now with a reader slower than its peer, which is where the
       --  octets went.
       --
-      --  A read does not end on a record boundary, so a part-record stays in
-      --  the engine's input queue and the next read is added to it. That
-      --  remainder grows a little with every read, and once it is nearly a
-      --  whole record the next full-size read no longer fits: the engine takes
-      --  what it can and says how much -- and the connection used to drop the
-      --  rest. A dropped octet is not a lost octet; it is a stream that no
-      --  longer parses, so the next record header lands mid-record and what
-      --  reaches the AEAD authenticates as a forgery.
+      --  Supplying the engine is a *partial* operation: its input queue is
+      --  bounded, it takes what fits and says how much. The connection dropped
+      --  the rest -- and a dropped octet is not a lost octet, it is a stream
+      --  that no longer parses. The next record header lands mid-record and
+      --  what reaches the AEAD authenticates as a forgery: bad_record_mac,
+      --  from this endpoint, at whatever offset the queue first filled.
       --
-      --  Which is why this was found as an unreliable network: an 82 MB
-      --  download failing with bad_record_mac at a different offset every run,
-      --  on the hosts whose reads are largest. It takes tens of full reads for
-      --  the remainder to grow that far, which is why every test that sent a
-      --  message and read it back passed.
+      --  Reaching that state needs a reader that falls behind: the input queue
+      --  only backs up while records cannot be moved into the plaintext queue,
+      --  and the plaintext queue only fills while nobody is draining it. This
+      --  reads one small sip per round against a sender running flat out,
+      --  which is an ordinary client on a fast link and was not something any
+      --  test here did -- every one of them read what it sent as it sent it.
       declare
-         Payload  : Byte_Array (1 .. 1_200_000);
-         Landed   : Byte_Array (1 .. 1_200_000) := [others => 0];
+         Payload  : Byte_Array (1 .. 400_000);
+         Landed   : Byte_Array (1 .. 400_000) := [others => 0];
          Accepted : Byte_Index;
          Sent     : Byte_Index := 0;
          Received : Byte_Index := 0;
@@ -4163,14 +4162,17 @@ package body SSL.Internal_Tests is
          Rounds := 0;
          while Received < Payload'Length loop
             Rounds := Rounds + 1;
-            if Rounds > 100_000 then
-               return "a large stream did not get through";
+            if Rounds > 400_000 then
+               return "a stream did not get through to a reader behind it:"
+                      & " sent" & Byte_Index'Image (Sent)
+                      & " of" & Natural'Image (Payload'Length)
+                      & ", received" & Byte_Index'Image (Received);
             end if;
 
-            --  The sender runs ahead, so that what the receiver reads is a
-            --  full transport read rather than whatever has just trickled in.
-            --  A real peer on a fast link does this by itself.
-            for Feeding in 1 .. 200 loop
+            --  The sender runs ahead: several turns of writing and stepping
+            --  for every turn the receiver takes, so the transport always has
+            --  a full read waiting and the receiver's queues stay full.
+            for Feeding in 1 .. 20 loop
                if Sent < Payload'Length then
                   Conn.Write_Available
                     (Client, Payload (Sent + 1 .. Payload'Last), Accepted, Error);
@@ -4190,32 +4192,41 @@ package body SSL.Internal_Tests is
 
             Conn.Step (Server, Moved, Error);
             if SSL.Errors.Is_Error (Error) then
-               return "the server failed on a full read: "
+               return "the server failed while behind: "
                       & SSL.Errors.Image (Error);
             end if;
 
-            --  Everything available: an engine whose plaintext queue fills
-            --  refuses outright, and that backpressure is a different question
-            --  from this one.
+            --  One sip while the sender is still going, and everything once
+            --  it has stopped -- which is what a client busy with something
+            --  else does, and then what it does when it is not.
+            --
+            --  The sips are the point: a full queue is a reason to wait, not
+            --  a reason to fail, and it is only while the reader is behind
+            --  that the input queue backs up far enough for the engine to
+            --  take less than it is offered.
             loop
                declare
-                  Chunk : Byte_Array (1 .. 8_192) := [others => 0];
-                  Count : Byte_Index;
+                  Sip : Byte_Array (1 .. 1_024) := [others => 0];
+                  Got : Byte_Index;
                begin
-                  Conn.Read_Available (Server, Chunk, Count, Error);
+                  Conn.Read_Available (Server, Sip, Got, Error);
                   if SSL.Errors.Is_Error (Error) then
-                     return "reading a full stream failed: "
+                     return "reading behind the sender failed: "
                             & SSL.Errors.Image (Error);
                   end if;
-                  exit when Count = 0;
-                  Landed (Received + 1 .. Received + Count) := Chunk (1 .. Count);
-                  Received := Received + Count;
+
+                  exit when Got = 0;
+
+                  Landed (Received + 1 .. Received + Got) := Sip (1 .. Got);
+                  Received := Received + Got;
+
+                  exit when Sent < Payload'Length;
                end;
             end loop;
          end loop;
 
          if Landed /= Payload then
-            return "octets went missing from a stream of full reads";
+            return "octets went missing while the reader was behind";
          end if;
       end;
 

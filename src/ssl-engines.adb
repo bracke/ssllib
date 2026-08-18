@@ -2209,9 +2209,12 @@ package body SSL.Engines is
 
             Item.Plaintext.Append (Content, Ok);
             if not Ok then
-               --  The application has not been reading. Refusing is the
-               --  backpressure; growing the queue would be an unbounded buffer
-               --  a peer controls the size of.
+               --  Not reachable from the loop above, which stops before
+               --  opening a record that would not fit. Kept because this
+               --  procedure is called from more than one place and a queue
+               --  that cannot take what it was handed must not lose it
+               --  quietly: growing the queue would be an unbounded buffer a
+               --  peer controls the size of.
                Fail (Item, SSL.Errors.Make
                        (SSL.Errors.Code_Plaintext_Queue_Full,
                         SSL.Errors.Local_Implementation), Error);
@@ -2343,6 +2346,27 @@ package body SSL.Engines is
             end if;
 
             exit when Item.Input.Length < SSL.Records.Header_Length + Header.Length;
+
+            --  Room for what this record could yield, before it is opened.
+            --
+            --  Backpressure, rather than the refusal that stood here. A record
+            --  whose plaintext would not fit was decrypted anyway and then
+            --  failed the connection: an application reading slower than its
+            --  peer sends killed its own connection, which is not what a full
+            --  queue means. It means wait.
+            --
+            --  So the record stays in the input queue, undecrypted, and this
+            --  loop stops. Nothing is lost and nothing is forced: the input
+            --  queue fills, Ready stops asking the transport for more, and the
+            --  peer's own flow control does the rest -- which is what the
+            --  window on the other side is for.
+            --
+            --  Measured against the ciphertext length because the plaintext
+            --  length is inside the ciphertext: it is an upper bound, and
+            --  erring towards waiting is the safe direction.
+            exit when Item.State = Established
+              and then Item.Plaintext.Is_Reserved
+              and then Item.Plaintext.Space < Header.Length;
 
             declare
                Whole : Byte_Array
