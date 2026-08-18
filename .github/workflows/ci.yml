@@ -1,0 +1,82 @@
+# Continuous integration.
+#
+# This crate had none. It is the one that decides whether a TLS connection
+# works at all, its consumers reach the network through it, and every defect
+# found in it so far has been platform-specific: a record layer that dropped
+# octets on the hosts whose socket reads are largest and never on macOS, and a
+# trust bound set below what a Windows host ships. Both were found by a
+# consumer's CI, three crates away, as a download that would not complete.
+#
+# So: three hosts, and that is the point rather than a nicety. macOS must be
+# the x86_64 image -- the pinned gnat_native ships no aarch64-darwin binary --
+# which is the same rule every other crate in this workspace follows.
+#
+# The suite is offline: it drives two engines over an in-memory pipe and never
+# opens a socket, so nothing here depends on a network that might be having a
+# bad day.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-15-intel, windows-latest]
+
+    steps:
+      - name: Check out ssllib
+        uses: actions/checkout@v7
+        with:
+          path: ssllib
+
+      # cryptolib, truststores and hostkit are path pins, so they have to sit
+      # beside this crate before anything resolves.
+      - name: Check out sibling crates (transitive pin closure)
+        uses: bracke/project_tools/.github/actions/checkout-ada-siblings@main
+        with:
+          root: ssllib
+
+      - name: Set up Alire
+        uses: alire-project/setup-alire@v6
+        with:
+          toolchain: gnat_native=15.2.1 gprbuild
+
+      - name: Raise Alire solver timeout so slow runners get a complete solution
+        # Default solver.timeout is 5 s (+10 s grace); a large graph on a slow
+        # runner can time out and ship an INCOMPLETE solution, silently
+        # dropping transitive crates. Give the solver room.
+        shell: bash
+        run: alr settings --global --set solver.timeout 600
+
+      - name: Build the library
+        working-directory: ssllib
+        shell: bash
+        run: alr --non-interactive build
+
+      - name: Build the suite
+        working-directory: ssllib/tests
+        shell: bash
+        run: alr --non-interactive build
+
+      - name: Run the suite
+        working-directory: ssllib/tests
+        shell: bash
+        # Bounded, because a TLS engine that stops making progress stops
+        # quietly: a suite that hung would take the whole job's twenty minutes
+        # and report nothing at all.
+        run: |
+          set -eu
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            ./bin/ssllib_tests.exe
+          else
+            ./bin/ssllib_tests
+          fi
