@@ -4260,6 +4260,398 @@ package body SSL.Internal_Tests is
       return "";
    end Check_Connection_Over_Pipes;
 
+   ----------------------------------------------------
+   -- Check_A_Configured_Queue_Is_The_Boundary --
+   ----------------------------------------------------
+
+   Boundary_Anchors      : aliased SSL.Trust.Snapshot;
+   Boundary_Credential   : aliased SSL.Credentials.Credential;
+   Boundary_Client_Setup : aliased SSL.Configurations.Client_Configuration;
+   Boundary_Server_Setup : aliased SSL.Configurations.Server_Configuration;
+
+   function Check_A_Configured_Queue_Is_The_Boundary return String is
+      package Config renames SSL.Configurations;
+      package Engines renames SSL.Engines;
+
+      use type Engines.Lifecycle;
+
+      Now  : constant SSL.Clocks.Wall_Time := SSL.Clocks.UTC (2026, 8, 1);
+      Tick : constant SSL.Clocks.Monotonic_Time := SSL.Clocks.Current_Monotonic;
+
+      --  Two plaintext records: a number that is neither the default this
+      --  library reserves nor the smallest it accepts, so a queue that came
+      --  from anywhere but the configuration is a queue of the wrong size.
+      Room : constant := 2 * SSL.Limits.Protocol_Plaintext_Record_Limit;
+
+      Narrow : SSL.Limits.Resource_Limits := SSL.Limits.Default_Limits;
+
+      Client : Engines.Engine;
+      Server : Engines.Engine;
+      Error  : SSL.Errors.Error_Information;
+      Ok     : Boolean;
+
+      function Pump
+        (From : in out Engines.Engine;
+         To   : in out Engines.Engine) return Byte_Index;
+
+      function Pump
+        (From : in out Engines.Engine;
+         To   : in out Engines.Engine) return Byte_Index
+      is
+         Moved : Byte_Index := 0;
+      begin
+         while Engines.Pending_Encrypted (From) > 0 loop
+            declare
+               Chunk    : Byte_Array (1 .. 4_096) := [others => 0];
+               Copied   : Byte_Index;
+               Consumed : Byte_Index;
+            begin
+               Engines.Peek_Encrypted (From, Chunk, Copied);
+               exit when Copied = 0;
+
+               Engines.Supply_Encrypted (To, Chunk (1 .. Copied), Consumed, Error);
+               exit when SSL.Errors.Is_Error (Error) or else Consumed = 0;
+
+               Engines.Consume_Encrypted (From, Consumed);
+               Moved := Moved + Consumed;
+
+               Engines.Advance (To, Tick, Error);
+               exit when SSL.Errors.Is_Error (Error);
+            end;
+         end loop;
+         return Moved;
+      end Pump;
+
+      Rounds : Natural := 0;
+   begin
+      Narrow.Maximum_Plaintext_Queue := Room;
+
+      SSL.Trust.Load_Explicit_Anchors
+        (Boundary_Anchors, Tests_Fixtures.Anchor_PEM, Now, Bounds, Error);
+      if SSL.Errors.Is_Error (Error) then
+         return "the anchor fixture did not load";
+      end if;
+
+      SSL.Credentials.Load_PEM
+        (Boundary_Credential, Tests_Fixtures.Leaf_Certificate_PEM,
+         Tests_Fixtures.Leaf_Key_PEM, Bounds, Error);
+      if SSL.Errors.Is_Error (Error) then
+         return "the credential fixture did not load";
+      end if;
+
+      declare
+         Builder : Config.Client_Builder;
+      begin
+         Config.Secure_Client_Defaults (Builder);
+         Config.Set_Expected_Name
+           (Builder, SSL.Server_Names.Name ("www.example.com"), Ok => Ok);
+         Config.Set_Anchors (Builder, Boundary_Anchors'Access, Ok);
+         Config.Build (Builder, Boundary_Client_Setup, Error);
+         if SSL.Errors.Is_Error (Error) then
+            return "the client configuration did not build";
+         end if;
+      end;
+
+      declare
+         Builder : Config.Server_Builder;
+      begin
+         Config.Secure_Server_Defaults (Builder);
+         Config.Add_Credential (Builder, Boundary_Credential'Access, Ok);
+         Config.Set_Limits (Builder, Narrow, Ok);
+         if not Ok then
+            return "the server would not take a two-record plaintext queue";
+         end if;
+
+         Config.Build (Builder, Boundary_Server_Setup, Error);
+         if SSL.Errors.Is_Error (Error) then
+            return "the server configuration did not build";
+         end if;
+      end;
+
+      Engines.Start_Server
+        (Server, Boundary_Server_Setup'Access, SSL.No_Connection, Now, Error);
+      if SSL.Errors.Is_Error (Error) then
+         return "the server engine did not start: " & SSL.Errors.Image (Error);
+      end if;
+
+      Engines.Start_Client
+        (Client, Boundary_Client_Setup'Access, SSL.No_Connection, Now, Error);
+      if SSL.Errors.Is_Error (Error) then
+         return "the client engine did not start: " & SSL.Errors.Image (Error);
+      end if;
+
+      loop
+         Rounds := Rounds + 1;
+         if Rounds > 16 then
+            return "the engines did not converge";
+         end if;
+
+         declare
+            Forward : constant Byte_Index := Pump (Client, Server);
+            Back    : constant Byte_Index := Pump (Server, Client);
+         begin
+            if SSL.Errors.Is_Error (Error) then
+               return "an engine refused during the handshake: "
+                      & SSL.Errors.Image (Error);
+            end if;
+            exit when Forward = 0 and then Back = 0;
+         end;
+      end loop;
+
+      if Engines.State_Of (Server) /= Engines.Established then
+         return "the server engine did not establish";
+      end if;
+
+      --  Far more than the queue is wide, written by a sender that is not
+      --  narrow, into a reader that never reads. What the reader holds
+      --  afterwards is its queue.
+      declare
+         Payload  : constant Byte_Array (1 .. 8 * Room) := [others => 16#3C#];
+         Accepted : Byte_Index;
+         Sent     : Byte_Index := 0;
+         Ignored  : Byte_Index;
+      begin
+         for Turn in 1 .. 64 loop
+            exit when Sent >= Payload'Length;
+
+            Engines.Write_Plaintext
+              (Client, Payload (Sent + 1 .. Payload'Last), Accepted, Error);
+            if SSL.Errors.Is_Error (Error) then
+               return "writing failed: " & SSL.Errors.Image (Error);
+            end if;
+            Sent := Sent + Accepted;
+
+            Ignored := Pump (Client, Server);
+            if SSL.Errors.Is_Error (Error) then
+               return "the server failed while filling: "
+                      & SSL.Errors.Image (Error);
+            end if;
+         end loop;
+
+         if Engines.Pending_Plaintext (Server) = 0 then
+            return "a reader that was sent eight queues' worth holds some of it";
+         end if;
+
+         if Engines.Pending_Plaintext (Server) > Byte_Index (Room) then
+            return "a reader holds no more plaintext than its configured"
+                   & " queue: it holds"
+                   & Byte_Index'Image (Engines.Pending_Plaintext (Server))
+                   & " with a queue of" & Natural'Image (Room);
+         end if;
+      end;
+
+      Engines.Wipe (Client);
+      Engines.Wipe (Server);
+      return "";
+   end Check_A_Configured_Queue_Is_The_Boundary;
+
+   ------------------------------------------------
+   -- Check_A_Queue_Of_One_Record_Still_Moves --
+   ------------------------------------------------
+
+   Narrow_To_Server : aliased Tests_Pipes.Pipe;
+   Narrow_To_Client : aliased Tests_Pipes.Pipe;
+   Narrow_Client    : aliased Tests_Pipes.Pipe_Transport;
+   Narrow_Server    : aliased Tests_Pipes.Pipe_Transport;
+
+   Narrow_Anchors      : aliased SSL.Trust.Snapshot;
+   Narrow_Credential   : aliased SSL.Credentials.Credential;
+   Narrow_Client_Setup : aliased SSL.Configurations.Client_Configuration;
+   Narrow_Server_Setup : aliased SSL.Configurations.Server_Configuration;
+
+   function Check_A_Queue_Of_One_Record_Still_Moves return String is
+      package Config renames SSL.Configurations;
+      package Conn renames SSL.Connections;
+
+      Now : constant SSL.Clocks.Wall_Time := SSL.Clocks.UTC (2026, 8, 1);
+
+      --  The smallest plaintext queue SSL.Limits.Is_Valid accepts: exactly one
+      --  plaintext record. A protected record carrying one is longer than that
+      --  -- the tag, the inner content type and any padding are inside it --
+      --  so an endpoint measuring room by the ciphertext length finds an empty
+      --  queue too small and waits for it to drain.
+      Narrow : SSL.Limits.Resource_Limits := SSL.Limits.Default_Limits;
+
+      Client : Conn.Connection;
+      Server : Conn.Connection;
+      Error  : SSL.Errors.Error_Information;
+      Ok     : Boolean;
+      Moved  : Boolean;
+      Rounds : Natural := 0;
+   begin
+      Narrow.Maximum_Plaintext_Queue := SSL.Limits.Protocol_Plaintext_Record_Limit;
+
+      if not SSL.Limits.Is_Valid (Narrow) then
+         return "a queue of one plaintext record is a configuration this"
+                & " library accepts, and this one was refused";
+      end if;
+
+      Tests_Pipes.Reset (Narrow_To_Server);
+      Tests_Pipes.Reset (Narrow_To_Client);
+      Tests_Pipes.Attach
+        (Narrow_Client, Narrow_To_Server'Access, Narrow_To_Client'Access, 'c');
+      Tests_Pipes.Attach
+        (Narrow_Server, Narrow_To_Client'Access, Narrow_To_Server'Access, 's');
+
+      SSL.Trust.Load_Explicit_Anchors
+        (Narrow_Anchors, Tests_Fixtures.Anchor_PEM, Now, Bounds, Error);
+      if SSL.Errors.Is_Error (Error) then
+         return "the anchor fixture did not load";
+      end if;
+
+      SSL.Credentials.Load_PEM
+        (Narrow_Credential, Tests_Fixtures.Leaf_Certificate_PEM,
+         Tests_Fixtures.Leaf_Key_PEM, Bounds, Error);
+      if SSL.Errors.Is_Error (Error) then
+         return "the credential fixture did not load";
+      end if;
+
+      declare
+         Builder : Config.Client_Builder;
+      begin
+         Config.Secure_Client_Defaults (Builder);
+         Config.Set_Expected_Name
+           (Builder, SSL.Server_Names.Name ("www.example.com"), Ok => Ok);
+         Config.Set_Anchors (Builder, Narrow_Anchors'Access, Ok);
+         Config.Build (Builder, Narrow_Client_Setup, Error);
+         if SSL.Errors.Is_Error (Error) then
+            return "the client configuration did not build";
+         end if;
+      end;
+
+      declare
+         Builder : Config.Server_Builder;
+      begin
+         Config.Secure_Server_Defaults (Builder);
+         Config.Add_Credential (Builder, Narrow_Credential'Access, Ok);
+
+         --  Only the reader is narrow. The sender keeps the defaults, so what
+         --  arrives is a full-size record rather than one the sender happened
+         --  to cut small.
+         Config.Set_Limits (Builder, Narrow, Ok);
+         if not Ok then
+            return "the server would not take a queue of one record";
+         end if;
+
+         Config.Build (Builder, Narrow_Server_Setup, Error);
+         if SSL.Errors.Is_Error (Error) then
+            return "the server configuration did not build";
+         end if;
+      end;
+
+      SSL.Servers.Accept_Connection
+        (Item     => Server,
+         Config   => Narrow_Server_Setup'Access,
+         Medium   => Narrow_Server'Unchecked_Access,
+         Identity => SSL.No_Connection,
+         Now      => Now,
+         Error    => Error);
+      if SSL.Errors.Is_Error (Error) then
+         return "the server connection did not start: " & SSL.Errors.Image (Error);
+      end if;
+
+      SSL.Clients.Connect
+        (Item     => Client,
+         Config   => Narrow_Client_Setup'Access,
+         Medium   => Narrow_Client'Unchecked_Access,
+         Identity => SSL.No_Connection,
+         Now      => Now,
+         Error    => Error);
+      if SSL.Errors.Is_Error (Error) then
+         return "the client connection did not start: " & SSL.Errors.Image (Error);
+      end if;
+
+      loop
+         Rounds := Rounds + 1;
+         if Rounds > 4_000 then
+            return "the connections did not converge with a narrow queue";
+         end if;
+
+         Conn.Step (Client, Moved, Error);
+         if SSL.Errors.Is_Error (Error) then
+            return "the client failed: " & SSL.Errors.Image (Error);
+         end if;
+
+         Conn.Step (Server, Moved, Error);
+         if SSL.Errors.Is_Error (Error) then
+            return "the server failed: " & SSL.Errors.Image (Error);
+         end if;
+
+         exit when Conn.Is_Established (Client) and then Conn.Is_Established (Server);
+      end loop;
+
+      --  A full record's worth, so the ciphertext is longer than the reader's
+      --  whole queue. Anything smaller fits either way and proves nothing.
+      declare
+         Payload  : Byte_Array (1 .. SSL.Limits.Protocol_Plaintext_Record_Limit);
+         Landed   : Byte_Array (1 .. Payload'Length) := [others => 0];
+         Accepted : Byte_Index;
+         Sent     : Byte_Index := 0;
+         Received : Byte_Index := 0;
+      begin
+         for Index in Payload'Range loop
+            Payload (Index) := Byte ((Natural (Index) * 11 + 5) mod 256);
+         end loop;
+
+         Rounds := 0;
+         while Received < Payload'Length loop
+            Rounds := Rounds + 1;
+
+            --  Bounded, because the failure this guards against is a stall:
+            --  an endpoint that will not open a record until a queue it is
+            --  not draining has drained. A test that waited for it would hang
+            --  a suite instead of naming it.
+            if Rounds > 20_000 then
+               return "a full-size record did not reach a reader whose queue"
+                      & " is one record wide: sent" & Byte_Index'Image (Sent)
+                      & ", received" & Byte_Index'Image (Received);
+            end if;
+
+            if Sent < Payload'Length then
+               Conn.Write_Available
+                 (Client, Payload (Sent + 1 .. Payload'Last), Accepted, Error);
+               if SSL.Errors.Is_Error (Error) then
+                  return "writing failed: " & SSL.Errors.Image (Error);
+               end if;
+               Sent := Sent + Accepted;
+            end if;
+
+            Conn.Step (Client, Moved, Error);
+            if SSL.Errors.Is_Error (Error) then
+               return "the client failed while sending: " & SSL.Errors.Image (Error);
+            end if;
+
+            Conn.Step (Server, Moved, Error);
+            if SSL.Errors.Is_Error (Error) then
+               return "the server failed while receiving: " & SSL.Errors.Image (Error);
+            end if;
+
+            declare
+               Chunk : Byte_Array (1 .. 4_096) := [others => 0];
+               Count : Byte_Index;
+            begin
+               Conn.Read_Available (Server, Chunk, Count, Error);
+               if SSL.Errors.Is_Error (Error) then
+                  return "the server failed while reading: " & SSL.Errors.Image (Error);
+               end if;
+
+               if Count > 0 then
+                  Landed (Received + 1 .. Received + Count) := Chunk (1 .. Count);
+                  Received := Received + Count;
+               end if;
+            end;
+         end loop;
+
+         if Landed /= Payload then
+            return "a full-size record did not arrive intact through a narrow queue";
+         end if;
+      end;
+
+      Conn.Wipe (Client);
+      Conn.Wipe (Server);
+      return "";
+   end Check_A_Queue_Of_One_Record_Still_Moves;
+
    -------------------------------------
    -- Check_Truncation_Detected --
    -------------------------------------

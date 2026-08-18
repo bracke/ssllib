@@ -661,16 +661,28 @@ package body SSL.Engines is
 
    --  Reserve the three queues and the flight staging buffer. One place, so a
    --  client and a server cannot end up with different capacities.
+   --
+   --  Sized from this endpoint's own limits, which is what those limits are
+   --  for. They were not: the queues were reserved at three constants in the
+   --  spec, so an endpoint that raised Maximum_Plaintext_Queue got the
+   --  constant, one that lowered it got the constant, and SSL.Limits.Is_Valid
+   --  checked relationships between numbers that never reached a buffer. The
+   --  constants are the defaults now, so what an endpoint that configures
+   --  nothing reserves is unchanged.
+   --
+   --  Item.Bounds is read here, so it has to be set before this is called.
    procedure Reserve_Buffers (Item : in out Engine; Ok : out Boolean);
 
    procedure Reserve_Buffers (Item : in out Engine; Ok : out Boolean) is
       Step : Boolean;
    begin
-      Item.Input.Reserve (Input_Capacity, Step);
+      Item.Input.Reserve (Byte_Index (Item.Bounds.Maximum_Input_Buffer), Step);
       Ok := Step;
-      Item.Output.Reserve (Output_Capacity, Step);
+      Item.Output.Reserve
+        (Byte_Index (Item.Bounds.Maximum_Ciphertext_Queue), Step);
       Ok := Ok and then Step;
-      Item.Plaintext.Reserve (Plain_Capacity, Step);
+      Item.Plaintext.Reserve
+        (Byte_Index (Item.Bounds.Maximum_Plaintext_Queue), Step);
       Ok := Ok and then Step;
       Item.Handshake.Reserve (Flight_Capacity, Step);
       Ok := Ok and then Step;
@@ -689,6 +701,9 @@ package body SSL.Engines is
    begin
       Error := SSL.Errors.No_Error;
 
+      --  Before the buffers, which are sized from it.
+      Item.Bounds := SSL.Configurations.Bounds (Config.all);
+
       Reserve_Buffers (Item, Ok);
       if not Ok then
          Fail (Item, SSL.Errors.Make
@@ -697,7 +712,6 @@ package body SSL.Engines is
       end if;
 
       Item.Kind := Client_Endpoint;
-      Item.Bounds := SSL.Configurations.Bounds (Config.all);
       Item.Now := Now;
       Item.Identity := Identity;
       Item.Context := SSL.Configurations.Security_Context_Of (Config.all);
@@ -825,6 +839,9 @@ package body SSL.Engines is
    begin
       Error := SSL.Errors.No_Error;
 
+      --  Before the buffers, which are sized from it.
+      Item.Bounds := SSL.Configurations.Bounds (Config.all);
+
       Reserve_Buffers (Item, Ok);
       if not Ok then
          Fail (Item, SSL.Errors.Make
@@ -833,7 +850,6 @@ package body SSL.Engines is
       end if;
 
       Item.Kind := Server_Endpoint;
-      Item.Bounds := SSL.Configurations.Bounds (Config.all);
       Item.Now := Now;
       Item.Identity := Identity;
       Item.Context := SSL.Configurations.Security_Context_Of (Config.all);
@@ -2209,12 +2225,14 @@ package body SSL.Engines is
 
             Item.Plaintext.Append (Content, Ok);
             if not Ok then
-               --  Not reachable from the loop above, which stops before
-               --  opening a record that would not fit. Kept because this
-               --  procedure is called from more than one place and a queue
-               --  that cannot take what it was handed must not lose it
-               --  quietly: growing the queue would be an unbounded buffer a
-               --  peer controls the size of.
+               --  Not reachable while the queue holds one plaintext record and
+               --  a record carries no more than one: the loop above waits when
+               --  the queue has something in it and no record is opened
+               --  against an empty queue that could not take it. It is kept
+               --  because a queue that cannot take what it was handed must not
+               --  lose it quietly -- growing the queue would be an unbounded
+               --  buffer a peer controls the size of, and dropping the content
+               --  would be a stream that no longer parses.
                Fail (Item, SSL.Errors.Make
                        (SSL.Errors.Code_Plaintext_Queue_Full,
                         SSL.Errors.Local_Implementation), Error);
@@ -2363,9 +2381,25 @@ package body SSL.Engines is
             --
             --  Measured against the ciphertext length because the plaintext
             --  length is inside the ciphertext: it is an upper bound, and
-            --  erring towards waiting is the safe direction.
+            --  erring towards waiting is the safe direction -- but only while
+            --  there is something to wait for.
+            --
+            --  An empty queue is never waited on. Waiting is for a reader that
+            --  is behind, and a queue with nothing in it has no reader behind
+            --  it: what it has is a record whose *ciphertext* is longer than
+            --  the queue is wide, which an upper bound will say about a full
+            --  record whenever the queue is close to one record wide. Waiting
+            --  then is waiting for a drain that cannot come. An endpoint
+            --  configured with the smallest plaintext queue SSL.Limits accepts
+            --  -- exactly one plaintext record -- stalled on the first
+            --  full-size record it was sent.
+            --
+            --  Opening it is safe: the queue holds at least one plaintext
+            --  record, because Is_Valid refuses a configuration where it does
+            --  not, and a record carries at most one plaintext record's worth.
             exit when Item.State = Established
               and then Item.Plaintext.Is_Reserved
+              and then Item.Plaintext.Length > 0
               and then Item.Plaintext.Space < Header.Length;
 
             declare

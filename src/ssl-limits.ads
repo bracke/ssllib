@@ -94,12 +94,30 @@ package SSL.Limits is
       --  Encrypted output queued for the caller to drain, and plaintext
       --  queued for the caller to read. Both are the backpressure boundary:
       --  when the queue is full the engine reports that rather than growing.
-      Maximum_Ciphertext_Queue : Positive := 1024 * 1024;
-      Maximum_Plaintext_Queue : Positive := 1024 * 1024;
+      --
+      --  These are what the engine reserves, per connection, at the moment it
+      --  starts -- so they are a memory decision as much as a backpressure
+      --  one, and the defaults are what this library has always reserved
+      --  rather than the megabyte that used to stand here and reach nothing.
+      --  A megabyte each would have been four times the footprint of every
+      --  connection every consumer opens, which is not a change a corrected
+      --  number should smuggle in.
+      --
+      --  Eight protected records of output, because a whole handshake flight
+      --  -- EncryptedExtensions through Finished, with a certificate chain in
+      --  the middle -- is queued before a transport has taken any of it.
+      Maximum_Ciphertext_Queue : Positive :=
+        8 * (Protocol_Plaintext_Record_Limit + 256 + 5);
+
+      --  Four plaintext records for the reader to fall behind by.
+      Maximum_Plaintext_Queue : Positive :=
+        4 * Protocol_Plaintext_Record_Limit;
 
       --  Encrypted input held while a record is incomplete. One maximum-size
-      --  protected record plus its header and expansion is the floor.
-      Maximum_Input_Buffer : Positive := 2 * (Protocol_Plaintext_Record_Limit + 256);
+      --  protected record plus its header and expansion is the floor; two, so
+      --  that a partially delivered record and the one behind it both fit.
+      Maximum_Input_Buffer : Positive :=
+        2 * (Protocol_Plaintext_Record_Limit + 256 + 5);
 
       ------------------------------------------------------------------------
       --  Trust, revocation and pinning

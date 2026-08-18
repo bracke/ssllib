@@ -387,9 +387,10 @@ private
    Ciphertext_Limit : constant Byte_Index :=
      SSL.Limits.Protocol_Plaintext_Record_Limit + 256 + SSL.Records.Header_Length;
 
-   --  Two records' worth of input, so that a partially delivered record and the
-   --  one behind it can both be held; four of output, so that a whole handshake
-   --  flight can be queued before a transport has taken any of it.
+   --  What the three queues used to be reserved at, whatever an endpoint had
+   --  configured. They are SSL.Limits' defaults now, and the engine reserves
+   --  what it was configured with; these are kept as the floor a caller can
+   --  compare against, and as the record of what a default connection costs.
    Input_Capacity  : constant Byte_Index := 2 * Ciphertext_Limit;
    Output_Capacity : constant Byte_Index := 8 * Ciphertext_Limit;
    Plain_Capacity  : constant Byte_Index := 4 * SSL.Limits.Protocol_Plaintext_Record_Limit;

@@ -369,6 +369,12 @@ package body Tests_Internals is
       pragma Unreferenced (T);
    begin
       Tests_Support.Expect_Ok (Internals.Check_Connection_Over_Pipes, "connection over pipes");
+      Tests_Support.Expect_Ok
+        (Internals.Check_A_Configured_Queue_Is_The_Boundary,
+         "a configured plaintext queue is the boundary");
+      Tests_Support.Expect_Ok
+        (Internals.Check_A_Queue_Of_One_Record_Still_Moves,
+         "a plaintext queue of one record still moves one");
    end Run_Pipes;
 
    procedure Run_Truncation (T : in out AUnit.Test_Cases.Test_Case'Class) is

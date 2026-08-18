@@ -119,6 +119,25 @@ package SSL.Internal_Tests is
    --  several records, and an orderly shutdown.
    function Check_Connection_Over_Pipes return String;
 
+   --  An endpoint whose plaintext queue is exactly one record long still
+   --  moves a full-size record through it.
+   --
+   --  Backpressure is measured against the *ciphertext* length, because the
+   --  plaintext length is inside the ciphertext -- so an empty queue that is
+   --  one plaintext record wide looks too small for a full record and would
+   --  wait for itself to drain. This drives that configuration and fails if
+   --  nothing arrives, rather than hanging where a suite cannot say why.
+   function Check_A_Queue_Of_One_Record_Still_Moves return String;
+
+   --  The plaintext queue an endpoint configured is the one it gets.
+   --
+   --  The queues were reserved at constants in SSL.Engines whatever an
+   --  endpoint had configured, so Maximum_Plaintext_Queue decided nothing and
+   --  the limits validator checked relationships between numbers that never
+   --  reached a buffer. This fills a reader that never reads and asks how much
+   --  it took.
+   function Check_A_Configured_Queue_Is_The_Boundary return String;
+
    --  A stream that ends without a close_notify must be distinguishable from
    --  one that closed properly.
    function Check_Truncation_Detected return String;

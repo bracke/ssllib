@@ -564,8 +564,16 @@ package body Tests_Public is
       Expect (Default_Limits.Maximum_Certificate_Count = 16, "certificate count default");
       Expect (Default_Limits.Maximum_Extension_Block = 64 * 1024, "extension block default");
       Expect (Default_Limits.Maximum_Extension_Count = 64, "extension count default");
-      Expect (Default_Limits.Maximum_Ciphertext_Queue = 1024 * 1024, "ciphertext queue default");
-      Expect (Default_Limits.Maximum_Plaintext_Queue = 1024 * 1024, "plaintext queue default");
+      --  The queues are what the engine reserves per connection, so these two
+      --  numbers are a memory decision. They read a megabyte each while the
+      --  engine reserved constants of its own and neither number reached a
+      --  buffer; now that they do, they say what has always been reserved.
+      Expect (Default_Limits.Maximum_Ciphertext_Queue = 8 * (16_384 + 256 + 5),
+              "ciphertext queue default");
+      Expect (Default_Limits.Maximum_Plaintext_Queue = 4 * 16_384,
+              "plaintext queue default");
+      Expect (Default_Limits.Maximum_Input_Buffer = 2 * (16_384 + 256 + 5),
+              "input buffer default");
       Expect (Default_Limits.Maximum_Path_Depth = 12, "path depth default");
 
       --  Each inconsistency is refused with a named reason rather than
