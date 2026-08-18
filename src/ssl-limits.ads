@@ -105,7 +105,19 @@ package SSL.Limits is
       --  Trust, revocation and pinning
       ------------------------------------------------------------------------
 
-      Maximum_Trust_Anchors : Positive := 512;
+      --  A bound on *hostile* input, so it has to sit above what an honest
+      --  host carries -- and 512 did not. A stock Windows runner's
+      --  LocalMachine\Root holds 563 root certificates; Linux carries 121 and
+      --  macOS 159. Load_System_Anchors refuses a store larger than this
+      --  rather than truncating it, which is right -- a silently shortened
+      --  trust base rejects certificates for a reason nobody can see -- so on
+      --  Windows the whole system store was refused and every TLS connection
+      --  from this library failed with no anchors at all.
+      --
+      --  Raised to a number no real store is near, and still a bound: what it
+      --  is defending against is a store somebody handed us, not the one the
+      --  operating system ships.
+      Maximum_Trust_Anchors : Positive := 4096;
       Maximum_OCSP_Response : Positive := 64 * 1024;
       Maximum_OCSP_Responses : Positive := 8;
       Maximum_CRL_Size : Positive := 1024 * 1024;
@@ -173,6 +185,9 @@ package SSL.Limits is
       Maximum_Extension_Body             => 8 * 1024,
       Maximum_Ciphertext_Queue           => 128 * 1024,
       Maximum_Plaintext_Queue            => 128 * 1024,
+      --  Deliberately below what a desktop host's own store holds: an endpoint
+      --  choosing these bounds is one that names its own anchors, and a host
+      --  store of several hundred roots is not what it means to trust.
       Maximum_Trust_Anchors              => 256,
       Maximum_Session_Cache_Entries      => 64,
       Maximum_Diagnostic_Events          => 128,
