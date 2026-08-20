@@ -63,6 +63,7 @@ package SSL.ALPN is
      with Post => Length'Result <= Maximum_Name_Length;
 
    --  Octet equality. Names are compared as octets, never case-folded.
+   overriding
    function "=" (Left, Right : Protocol_Name) return Boolean;
 
    --  A rendering safe for a log: the octets when they are all printable ASCII,

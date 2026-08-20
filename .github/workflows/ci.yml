@@ -60,7 +60,26 @@ jobs:
       - name: Build the library
         working-directory: ssllib
         shell: bash
-        run: alr --non-interactive build
+        run: |
+          set -o pipefail
+
+          #  A clean build says nothing, and nobody was checking that here:
+          #  `alr build` exits 0 with warnings on its output, and an
+          #  incremental build does not recompile the file that carries one --
+          #  which is why a fresh runner is the right place to ask.
+          #
+          #  This crate's own units only. `alr build` compiles the path
+          #  dependencies as well, and what one of those has to say about its
+          #  own sources belongs to its own repository.
+          alr -n build 2>&1 | tee "${RUNNER_TEMP:-/tmp}/build-output.txt"
+          if grep -Eq "^ssl[a-z0-9_.-]*\.(ad[bs]|c|h):[0-9]+:[0-9]+: " \
+             "${RUNNER_TEMP:-/tmp}/build-output.txt"
+          then
+            echo "The build said something. A clean build says nothing:"
+            grep -E "^ssl[a-z0-9_.-]*\.(ad[bs]|c|h):[0-9]+:[0-9]+: " \
+              "${RUNNER_TEMP:-/tmp}/build-output.txt"
+            exit 1
+          fi
 
       - name: Build the suite
         working-directory: ssllib/tests

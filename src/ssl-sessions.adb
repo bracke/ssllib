@@ -1,11 +1,7 @@
-with Ada.Streams;
-
 with SSL.Crypto;
 
 package body SSL.Sessions is
 
-   use type Ada.Streams.Stream_Element_Array;
-   use type SSL.ALPN.Protocol_Name;
    use type SSL.Clocks.Wall_Time;
    use type SSL.Server_Names.DNS_Name;
 

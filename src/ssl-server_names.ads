@@ -109,6 +109,7 @@ package SSL.Server_Names is
 
    --  Exact equality of normalized names. Both sides are already lower case, so
    --  this is octet equality and no folding happens here.
+   overriding
    function "=" (Left, Right : DNS_Name) return Boolean;
 
    --  Does Candidate match Pattern?
@@ -168,6 +169,7 @@ package SSL.Server_Names is
    --  Text form, for diagnostics.
    function Image (Item : IP_Address) return String;
 
+   overriding
    function "=" (Left, Right : IP_Address) return Boolean;
 
    --  Does this text look like an IP address literal? Used by Parse to refuse

@@ -346,6 +346,7 @@ package body SSL.Server_Names is
    -- "=" --
    ---------
 
+   overriding
    function "=" (Left, Right : DNS_Name) return Boolean is
    begin
       return Left.Used = Right.Used
@@ -796,6 +797,7 @@ package body SSL.Server_Names is
    -- "=" --
    ---------
 
+   overriding
    function "=" (Left, Right : IP_Address) return Boolean is
    begin
       return Left.Used = Right.Used

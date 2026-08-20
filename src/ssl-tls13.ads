@@ -1,6 +1,5 @@
 with SSL.ALPN;
 with SSL.Cipher_Suites;
-with SSL.Crypto;
 with SSL.Errors;
 with SSL.Handshake_Messages;
 with SSL.Key_Schedule;

@@ -1,3 +1,5 @@
+with SSL.Crypto;
+
 package body SSL.TLS13 is
 
    package Schedules renames SSL.Key_Schedule;

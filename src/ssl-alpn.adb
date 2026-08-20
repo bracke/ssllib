@@ -102,6 +102,7 @@ package body SSL.ALPN is
    -- "=" --
    ---------
 
+   overriding
    function "=" (Left, Right : Protocol_Name) return Boolean is
    begin
       return Left.Used = Right.Used

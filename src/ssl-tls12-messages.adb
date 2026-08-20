@@ -1,11 +1,8 @@
 with Ada.Streams;
 
-with SSL.Cipher_Suites;
-with SSL.Configurations;
-with SSL.Extensions;
-with SSL.Handshake_Messages;
 with SSL.Versions;
 with SSL.Wire;
+with SSL.Server_Names;
 
 package body SSL.TLS12.Messages is
 
@@ -88,7 +85,6 @@ package body SSL.TLS12.Messages is
       Cursor : out SSL.Wire.Cursor;
       Error  : out SSL.Errors.Error_Information)
    is
-      use type Messages.Message_Type;
 
       Kind     : Messages.Message_Type;
       Raw      : Messages.Type_Value;

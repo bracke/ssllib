@@ -1,13 +1,11 @@
 with SSL.ALPN;
 with SSL.Credentials;
 with SSL.Cipher_Suites;
-with SSL.Key_Schedule;
 with SSL.Server_Names;
 with SSL.Signature_Schemes;
 with SSL.Supported_Groups;
 with SSL.Transcripts;
 with SSL.Trust;
-with SSL.Sessions;
 with SSL.Trust.Pinning;
 with SSL.Trust.Revocation;
 with SSL.Versions;

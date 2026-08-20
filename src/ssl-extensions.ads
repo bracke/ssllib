@@ -41,7 +41,8 @@ private package SSL.Extensions is
    --  post_handshake_auth are features this library does not implement, and a
    --  peer offering one gets a named failure rather than a silent skip.
    type Extension_Kind is
-     (--  TLS 1.3, RFC 8446 section 4.2
+     (
+      --  TLS 1.3, RFC 8446 section 4.2
       Server_Name,
       Status_Request,
       Supported_Groups,

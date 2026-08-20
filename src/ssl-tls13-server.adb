@@ -3,8 +3,6 @@ with SSL.Authentication;
 with SSL.Cipher_Suites;
 with SSL.Credentials;
 with SSL.Handshake_Messages;
-with SSL.Key_Schedule;
-with SSL.Sessions;
 with SSL.Server_Names;
 with SSL.Signature_Schemes;
 with SSL.Supported_Groups;

@@ -25,7 +25,6 @@ package body SSL.Engines is
    use type SSL.Sessions.Client_Caches.Cache_Reference;
    use type SSL.Ticket_Keys.Ring_Reference;
 
-
    use type SSL.Alerts.Alert_Description;
    use type SSL.Records.Content_Type;
    use type SSL.Key_Schedule.Epoch;

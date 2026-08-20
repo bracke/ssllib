@@ -7,7 +7,6 @@ with SSL.Errors;
 with SSL.Extensions;
 with SSL.Handshake_Messages;
 with SSL.Limits;
-with SSL.Server_Names;
 with SSL.Signature_Schemes;
 with SSL.Supported_Groups;
 

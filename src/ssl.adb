@@ -1,4 +1,3 @@
-with Ada.Streams;
 
 package body SSL is
 

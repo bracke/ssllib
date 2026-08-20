@@ -30,7 +30,6 @@ package body SSL.Configurations is
       end case;
    end Image;
 
-
    function Image (Item : Negotiation_Preference) return String is
    begin
       case Item is

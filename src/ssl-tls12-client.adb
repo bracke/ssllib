@@ -107,7 +107,6 @@ package body SSL.TLS12.Client is
    end Request_Tickets;
 
    procedure Offer_Session (Item : in out Machine; Value : SSL.Sessions.Session) is
-      use type SSL.Versions.Protocol_Version;
    begin
       if not SSL.Sessions.Is_Present (Value)
         or else SSL.Sessions.Version (Value) /= SSL.Versions.TLS_1_2

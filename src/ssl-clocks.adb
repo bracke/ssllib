@@ -335,7 +335,6 @@ package body SSL.Clocks is
    -----------------------------------
 
    function Seconds_Since_Epoch (Item : Wall_Time) return Interfaces.Unsigned_64 is
-      use type Interfaces.Unsigned_64;
 
       Days : constant Long_Long_Integer :=
         Days_From_Civil (Integer (Item.Year), Integer (Item.Month), Integer (Item.Day));

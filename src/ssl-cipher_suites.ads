@@ -63,7 +63,8 @@ package SSL.Cipher_Suites is
    ---------------------------------------------------------------------------
 
    type Cipher_Suite is
-     (--  TLS 1.3, RFC 8446 appendix B.4
+     (
+      --  TLS 1.3, RFC 8446 appendix B.4
       TLS_AES_128_GCM_SHA256,
       TLS_AES_256_GCM_SHA384,
       TLS_CHACHA20_POLY1305_SHA256,
