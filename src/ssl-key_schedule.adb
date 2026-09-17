@@ -2,8 +2,6 @@ with SSL.Crypto;
 
 package body SSL.Key_Schedule is
 
-   use SSL.Cipher_Suites;
-
    --  RFC 8446 section 7.1 labels, spelled exactly as the specification does.
    --  They are the domain separation of the whole schedule: two secrets derived
    --  from the same input under different labels are unrelated, and a
